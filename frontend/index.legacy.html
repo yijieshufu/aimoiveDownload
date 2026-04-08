@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Downloader - 极速视频下载工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsmind@0.8.7/style/jsmind.css">
+    <script src="https://cdn.jsdelivr.net/npm/jsmind@0.8.7/es6/jsmind.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a365d',
+                        secondary: '#ffd700',
+                        success: '#48bb78',
+                        warning: '#ed8936',
+                        danger: '#f56565',
+                        dark: '#2d3748',
+                        light: '#f7fafc'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .text-shadow {
+                text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .gradient-bg {
+                background: linear-gradient(135deg, #1a365d 0%, #2c5282 100%);
+            }
+            .pulse-animation {
+                animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+            }
+            @keyframes pulse {
+                0%, 100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.5;
+                }
+            }
+            .slide-up {
+                animation: slideUp 0.5s ease-out;
+            }
+            @keyframes slideUp {
+                from {
+                    opacity: 0;
+                    transform: translateY(20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            .progress-animation {
+                transition: width 0.3s ease;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="gradient-bg text-white shadow-lg">
+        <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+            <div class="flex items-center space-x-2">
+                <i class="fa fa-download text-2xl text-secondary"></i>
+                <h1 class="text-xl font-bold">Video Downloader</h1>
+            </div>
+            <div class="hidden md:flex items-center space-x-6">
+                <a href="#" class="hover:text-secondary transition-colors">首页</a>
+                <a href="#" class="hover:text-secondary transition-colors">功能</a>
+                <a href="#" class="hover:text-secondary transition-colors">关于</a>
+                <button class="bg-secondary text-primary px-4 py-2 rounded-md font-bold hover:bg-yellow-400 transition-colors">
+                    升级专业版
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="container mx-auto px-4 py-8">
+        <!-- 英雄区 -->
+        <section class="text-center mb-12">
+            <h2 class="text-3xl md:text-4xl font-bold text-primary mb-4">
+                极速视频下载工具
+            </h2>
+            <p class="text-gray-600 max-w-2xl mx-auto mb-8">
+                支持多个平台，无损画质，一键下载。享受极速、全能的视频下载体验。
+            </p>
+        </section>
+
+        <!-- URL输入区 -->
+        <section class="max-w-3xl mx-auto mb-12 bg-white rounded-xl shadow-lg p-6 slide-up">
+            <div class="flex flex-col md:flex-row gap-4">
+                <input type="text" id="video-url" placeholder="请输入视频URL，例如：https://www.youtube.com/watch?v=..." 
+                       class="flex-1 px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent">
+                <button id="extract-btn" class="bg-primary text-white px-6 py-3 rounded-md font-bold hover:bg-blue-700 transition-colors flex items-center justify-center">
+                    <i class="fa fa-search mr-2"></i> 开始解析
+                </button>
+                <button id="summarize-btn" class="bg-emerald-600 text-white px-6 py-3 rounded-md font-bold hover:bg-emerald-700 transition-colors flex items-center justify-center">
+                    <i class="fa fa-file-text-o mr-2"></i> 视频总结
+                </button>
+            </div>
+            <!-- 已移除 cookies 上传入口：默认自动解析 -->
+        </section>
+
+        <!-- 解析加载动画 -->
+        <div id="loading-animation" class="hidden max-w-3xl mx-auto mb-12">
+            <div class="bg-white rounded-xl shadow-lg p-8 text-center">
+                <div class="inline-block pulse-animation">
+                    <i class="fa fa-spinner fa-spin text-4xl text-primary mb-4"></i>
+                </div>
+                <h3 class="text-xl font-bold text-primary mb-2">正在极速解析...</h3>
+                <p class="text-gray-600">请稍候，我们正在分析视频信息</p>
+            </div>
+        </div>
+
+        <div id="content-workspace" class="hidden lg:grid lg:grid-cols-12 gap-6 items-start">
+        <div class="lg:col-span-5 space-y-4">
+        <div id="video-player-panel" class="hidden bg-white rounded-xl shadow-lg p-4 slide-up">
+            <h3 class="text-lg font-bold text-primary mb-3">视频播放区域</h3>
+            <div class="aspect-video bg-gray-100 rounded-lg border border-gray-200 overflow-hidden flex items-center justify-center">
+                <img id="video-preview-image" src="" alt="视频预览" class="max-w-full max-h-full object-contain hidden">
+                <div id="video-preview-placeholder" class="text-sm text-gray-500">解析后显示视频预览</div>
+            </div>
+            <p id="video-preview-title" class="mt-2 text-sm text-gray-600 truncate"></p>
+        </div>
+
+        <!-- 视频信息区 -->
+        <div id="video-info" class="hidden bg-white rounded-xl shadow-lg p-6 slide-up">
+            <div class="flex flex-col md:flex-row gap-6">
+                <div class="md:w-1/3">
+                    <img id="video-thumbnail" src="" alt="视频缩略图" class="w-full h-auto rounded-lg shadow-md">
+                </div>
+                <div class="md:w-2/3">
+                    <h3 id="video-title" class="text-xl font-bold text-primary mb-2 truncate"></h3>
+                    <div class="flex items-center text-gray-600 mb-2">
+                        <i class="fa fa-user mr-2"></i>
+                        <span id="video-uploader"></span>
+                    </div>
+                    <div class="flex items-center text-gray-600 mb-2">
+                        <i class="fa fa-clock-o mr-2"></i>
+                        <span id="video-duration"></span>
+                    </div>
+                    <div class="flex items-center text-gray-600 mb-4">
+                        <i class="fa fa-eye mr-2"></i>
+                        <span id="video-views"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 画质选择区 -->
+        <div id="format-selector" class="hidden bg-white rounded-xl shadow-lg p-6 slide-up">
+            <h3 class="text-lg font-bold text-primary mb-4">选择下载格式</h3>
+            <div id="format-list" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <!-- 格式卡片将通过JavaScript动态生成 -->
+            </div>
+        </div>
+
+        <!-- 下载进度区 -->
+        <div id="download-progress" class="hidden bg-white rounded-xl shadow-lg p-6 slide-up">
+            <h3 class="text-lg font-bold text-primary mb-4">下载进度</h3>
+            <div class="mb-4">
+                <div class="flex justify-between mb-1">
+                    <span id="progress-text" class="text-sm font-medium text-gray-700">准备下载...</span>
+                    <span id="progress-percentage" class="text-sm font-medium text-primary">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="progress-bar" class="bg-primary h-2.5 rounded-full progress-animation" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <p class="text-sm text-gray-600">下载速度</p>
+                    <p id="download-speed" class="font-medium">0 KB/s</p>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-600">剩余时间</p>
+                    <p id="time-remaining" class="font-medium">--:--</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 下载完成区 -->
+        <div id="download-complete" class="hidden bg-white rounded-xl shadow-lg p-6 slide-up">
+            <div class="text-center">
+                <div class="inline-flex items-center justify-center w-16 h-16 bg-success rounded-full mb-4">
+                    <i class="fa fa-check text-white text-2xl"></i>
+                </div>
+                <h3 class="text-xl font-bold text-success mb-2">下载完成！</h3>
+                <p id="complete-message" class="text-gray-600 mb-6"></p>
+                <button id="download-file-btn" class="bg-primary text-white px-6 py-3 rounded-md font-bold hover:bg-blue-700 transition-colors flex items-center justify-center mx-auto">
+                    <i class="fa fa-download mr-2"></i> 下载文件
+                </button>
+            </div>
+        </div>
+
+        </div>
+        <div class="lg:col-span-7">
+        <!-- 视频总结区 -->
+        <div id="summary-section" class="hidden bg-white rounded-xl shadow-lg p-6 slide-up">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-bold text-primary">视频总结</h3>
+                <a id="download-md-btn" href="#" class="hidden bg-emerald-600 text-white px-4 py-2 rounded-md font-bold hover:bg-emerald-700 transition-colors">
+                    <i class="fa fa-download mr-2"></i>下载 Markdown
+                </a>
+            </div>
+            <div id="summary-status" class="text-sm text-gray-500 mb-3">等待开始</div>
+            <div id="summary-progress-wrap" class="mb-4">
+                <div class="flex justify-between mb-1">
+                    <span id="summary-progress-text" class="text-xs font-medium text-gray-600">未开始</span>
+                    <span id="summary-progress-percentage" class="text-xs font-medium text-primary">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="summary-progress-bar" class="bg-emerald-600 h-2.5 rounded-full progress-animation" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4 text-xs">
+                <div class="border border-gray-200 rounded p-2 bg-gray-50"><span class="text-gray-500">来源</span><div id="meta-source" class="font-semibold text-gray-700">-</div></div>
+                <div class="border border-gray-200 rounded p-2 bg-gray-50"><span class="text-gray-500">时长</span><div id="meta-duration" class="font-semibold text-gray-700">-</div></div>
+                <div class="border border-gray-200 rounded p-2 bg-gray-50"><span class="text-gray-500">摘要条数</span><div id="meta-summary-count" class="font-semibold text-gray-700">0</div></div>
+                <div class="border border-gray-200 rounded p-2 bg-gray-50"><span class="text-gray-500">导图节点</span><div id="meta-mindmap-count" class="font-semibold text-gray-700">0</div></div>
+            </div>
+
+            <div id="summary-empty-hint" class="text-sm text-gray-500 mb-4">
+                右侧是总结模块。先在左侧完成解析并选择清晰度下载，或直接点击上方“视频总结”开始生成。
+            </div>
+
+            <div class="flex flex-wrap gap-2 mb-4">
+                <button class="summary-tab-btn text-xs px-3 py-1.5 rounded border border-gray-300 bg-blue-50" data-tab="summary">摘要</button>
+                <button class="summary-tab-btn text-xs px-3 py-1.5 rounded border border-gray-300 bg-white" data-tab="chapters">章节</button>
+                <button class="summary-tab-btn text-xs px-3 py-1.5 rounded border border-gray-300 bg-white" data-tab="highlights">时间线</button>
+                <button class="summary-tab-btn text-xs px-3 py-1.5 rounded border border-gray-300 bg-white" data-tab="transcript">转录</button>
+                <button class="summary-tab-btn text-xs px-3 py-1.5 rounded border border-gray-300 bg-white" data-tab="mindmap">导图</button>
+                <button class="summary-tab-btn text-xs px-3 py-1.5 rounded border border-gray-300 bg-white" data-tab="qa">问答</button>
+            </div>
+
+            <div id="tab-summary" class="summary-tab-panel mb-4">
+                <h4 class="font-semibold text-gray-800 mb-2">摘要</h4>
+                <ul id="summary-list" class="list-disc pl-5 text-gray-700 space-y-1"></ul>
+            </div>
+            <div id="tab-chapters" class="summary-tab-panel mb-4 hidden">
+                <h4 class="font-semibold text-gray-800 mb-2">章节</h4>
+                <div id="chapter-list" class="space-y-3 text-gray-700"></div>
+            </div>
+            <div id="tab-highlights" class="summary-tab-panel hidden">
+                <h4 class="font-semibold text-gray-800 mb-2">时间戳要点</h4>
+                <ul id="highlight-list" class="list-disc pl-5 text-gray-700 space-y-1"></ul>
+            </div>
+            <div id="tab-transcript" class="summary-tab-panel mt-4 hidden">
+                <h4 class="font-semibold text-gray-800 mb-2">字幕/转录</h4>
+                <div class="text-xs text-gray-500 mb-2">来源：<span id="transcript-source">-</span></div>
+                <pre id="transcript-box" class="max-h-56 overflow-auto whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-md p-3 text-sm text-gray-700"></pre>
+            </div>
+            <div id="tab-mindmap" class="summary-tab-panel mt-4 hidden">
+                <h4 class="font-semibold text-gray-800 mb-2">思维导图</h4>
+                <div class="flex items-center gap-2 mb-2">
+                    <button id="mindmap-expand-btn" class="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">展开全部</button>
+                    <button id="mindmap-collapse-btn" class="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">收起到二级</button>
+                    <button id="mindmap-view-editor-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-blue-50 hover:bg-gray-50">编辑导图</button>
+                    <button id="mindmap-view-tree-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">树形视图</button>
+                    <button id="mindmap-view-mermaid-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">Mermaid视图</button>
+                    <button id="mindmap-download-mermaid-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">下载 .mmd</button>
+                    <button id="mindmap-copy-mermaid-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">复制 Mermaid</button>
+                    <button id="mindmap-zoom-in-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">放大</button>
+                    <button id="mindmap-zoom-out-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">缩小</button>
+                    <button id="mindmap-zoom-reset-btn" class="text-xs px-2 py-1 border border-gray-300 rounded bg-white hover:bg-gray-50">重置</button>
+                </div>
+                <div class="flex items-center gap-2 mb-2">
+                    <input id="mindmap-search" type="text" placeholder="搜索导图节点..." class="flex-1 px-2 py-1.5 text-xs border border-gray-300 rounded">
+                    <span class="text-xs text-gray-500">点击节点可定位到对应时间点</span>
+                </div>
+                <div id="mindmap-editor-wrap" class="border border-gray-200 rounded-lg p-3 bg-white mb-2">
+                    <div class="flex flex-wrap items-center gap-2 mb-2">
+                        <button id="mindmap-add-child-btn" class="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">新增子节点</button>
+                        <button id="mindmap-add-sibling-btn" class="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">新增同级</button>
+                        <button id="mindmap-rename-btn" class="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">重命名</button>
+                        <button id="mindmap-delete-btn" class="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">删除节点</button>
+                        <span class="text-xs text-gray-500">支持拖拽移动节点，接近 XMind 操作方式</span>
+                    </div>
+                    <div id="jsmind_container" class="w-full bg-white" style="height: 520px; overflow: auto;"></div>
+                </div>
+                <div id="mindmap-root"></div>
+                <div id="mindmap-mermaid-wrap" class="hidden border border-gray-200 rounded-lg p-3 bg-white overflow-auto">
+                    <div id="mindmap-mermaid"></div>
+                </div>
+            </div>
+            <div id="tab-qa" class="summary-tab-panel mt-4 hidden">
+                <h4 class="font-semibold text-gray-800 mb-2">AI问答</h4>
+                <div class="flex flex-col md:flex-row gap-2">
+                    <input id="qa-question" type="text" placeholder="基于当前视频内容提问..." class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary">
+                    <button id="qa-ask-btn" class="bg-primary text-white px-4 py-2 rounded-md font-bold hover:bg-blue-700 transition-colors">提问</button>
+                </div>
+                <div id="qa-answer" class="mt-3 text-sm text-gray-700 whitespace-pre-wrap"></div>
+            </div>
+        </div>
+        </div>
+        </div>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="bg-primary text-white py-8">
+        <div class="container mx-auto px-4">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div class="mb-4 md:mb-0">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa fa-download text-secondary"></i>
+                        <span class="font-bold">Video Downloader</span>
+                    </div>
+                    <p class="text-sm text-gray-300 mt-2">© 2026 Video Downloader. 保留所有权利。</p>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="#" class="hover:text-secondary transition-colors"><i class="fa fa-facebook"></i></a>
+                    <a href="#" class="hover:text-secondary transition-colors"><i class="fa fa-twitter"></i></a>
+                    <a href="#" class="hover:text-secondary transition-colors"><i class="fa fa-instagram"></i></a>
+                    <a href="#" class="hover:text-secondary transition-colors"><i class="fa fa-github"></i></a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // 全局变量
+        let currentVideoInfo = null;
+        let currentDownloadResult = null;
+        let downloadInterval = null;
+        let currentSummaryTaskId = '';
+        let currentMindmap = null;
+        let currentMindmapMmd = '';
+        let currentSummaryTitle = '';
+        let mermaidZoom = 1;
+        let jm = null;
+        let mindmapNodeSeq = 10000;
+        let currentResolvedUrl = '';
+
+        // DOM 元素
+        const videoUrlInput = document.getElementById('video-url');
+        const extractBtn = document.getElementById('extract-btn');
+        const summarizeBtn = document.getElementById('summarize-btn');
+        const loadingAnimation = document.getElementById('loading-animation');
+        const contentWorkspace = document.getElementById('content-workspace');
+        const videoPlayerPanel = document.getElementById('video-player-panel');
+        const videoPreviewImage = document.getElementById('video-preview-image');
+        const videoPreviewPlaceholder = document.getElementById('video-preview-placeholder');
+        const videoPreviewTitle = document.getElementById('video-preview-title');
+        const videoInfo = document.getElementById('video-info');
+        const videoThumbnail = document.getElementById('video-thumbnail');
+        const videoTitle = document.getElementById('video-title');
+        const videoUploader = document.getElementById('video-uploader');
+        const videoDuration = document.getElementById('video-duration');
+        const videoViews = document.getElementById('video-views');
+        const formatSelector = document.getElementById('format-selector');
+        const formatList = document.getElementById('format-list');
+        const downloadProgress = document.getElementById('download-progress');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const progressPercentage = document.getElementById('progress-percentage');
+        const downloadSpeed = document.getElementById('download-speed');
+        const timeRemaining = document.getElementById('time-remaining');
+        const downloadComplete = document.getElementById('download-complete');
+        const completeMessage = document.getElementById('complete-message');
+        const downloadFileBtn = document.getElementById('download-file-btn');
+        const summarySection = document.getElementById('summary-section');
+        const summaryStatus = document.getElementById('summary-status');
+        const summaryProgressBar = document.getElementById('summary-progress-bar');
+        const summaryProgressText = document.getElementById('summary-progress-text');
+        const summaryProgressPercentage = document.getElementById('summary-progress-percentage');
+        const summaryTabBtns = Array.from(document.querySelectorAll('.summary-tab-btn'));
+        const summaryList = document.getElementById('summary-list');
+        const chapterList = document.getElementById('chapter-list');
+        const highlightList = document.getElementById('highlight-list');
+        const downloadMdBtn = document.getElementById('download-md-btn');
+        const metaSource = document.getElementById('meta-source');
+        const metaDuration = document.getElementById('meta-duration');
+        const metaSummaryCount = document.getElementById('meta-summary-count');
+        const metaMindmapCount = document.getElementById('meta-mindmap-count');
+        const transcriptSource = document.getElementById('transcript-source');
+        const transcriptBox = document.getElementById('transcript-box');
+        const mindmapRoot = document.getElementById('mindmap-root');
+        const mindmapExpandBtn = document.getElementById('mindmap-expand-btn');
+        const mindmapCollapseBtn = document.getElementById('mindmap-collapse-btn');
+        const mindmapViewEditorBtn = document.getElementById('mindmap-view-editor-btn');
+        const mindmapViewTreeBtn = document.getElementById('mindmap-view-tree-btn');
+        const mindmapViewMermaidBtn = document.getElementById('mindmap-view-mermaid-btn');
+        const mindmapDownloadMermaidBtn = document.getElementById('mindmap-download-mermaid-btn');
+        const mindmapCopyMermaidBtn = document.getElementById('mindmap-copy-mermaid-btn');
+        const mindmapZoomInBtn = document.getElementById('mindmap-zoom-in-btn');
+        const mindmapZoomOutBtn = document.getElementById('mindmap-zoom-out-btn');
+        const mindmapZoomResetBtn = document.getElementById('mindmap-zoom-reset-btn');
+        const mindmapSearch = document.getElementById('mindmap-search');
+        const mindmapEditorWrap = document.getElementById('mindmap-editor-wrap');
+        const mindmapAddChildBtn = document.getElementById('mindmap-add-child-btn');
+        const mindmapAddSiblingBtn = document.getElementById('mindmap-add-sibling-btn');
+        const mindmapRenameBtn = document.getElementById('mindmap-rename-btn');
+        const mindmapDeleteBtn = document.getElementById('mindmap-delete-btn');
+        const mindmapMermaidWrap = document.getElementById('mindmap-mermaid-wrap');
+        const mindmapMermaid = document.getElementById('mindmap-mermaid');
+        const qaQuestion = document.getElementById('qa-question');
+        const qaAskBtn = document.getElementById('qa-ask-btn');
+        const qaAnswer = document.getElementById('qa-answer');
+
+        // 事件监听器
+        extractBtn.addEventListener('click', extractVideoInfo);
+        summarizeBtn.addEventListener('click', summarizeVideo);
+        qaAskBtn.addEventListener('click', askSummaryQuestion);
+        mindmapExpandBtn.addEventListener('click', () => toggleAllMindmapNodes(true));
+        mindmapCollapseBtn.addEventListener('click', () => toggleAllMindmapNodes(false));
+        mindmapViewEditorBtn.addEventListener('click', () => switchMindmapView('editor'));
+        mindmapViewTreeBtn.addEventListener('click', () => switchMindmapView('tree'));
+        mindmapViewMermaidBtn.addEventListener('click', () => switchMindmapView('mermaid'));
+        mindmapDownloadMermaidBtn.addEventListener('click', downloadMermaidMmd);
+        mindmapCopyMermaidBtn.addEventListener('click', copyMermaidMmd);
+        mindmapZoomInBtn.addEventListener('click', () => zoomMermaid(0.1));
+        mindmapZoomOutBtn.addEventListener('click', () => zoomMermaid(-0.1));
+        mindmapZoomResetBtn.addEventListener('click', resetMermaidZoom);
+        mindmapSearch.addEventListener('input', () => filterMindmap(mindmapSearch.value));
+        mindmapAddChildBtn.addEventListener('click', addMindmapChildNode);
+        mindmapAddSiblingBtn.addEventListener('click', addMindmapSiblingNode);
+        mindmapRenameBtn.addEventListener('click', renameMindmapNode);
+        mindmapDeleteBtn.addEventListener('click', deleteMindmapNode);
+        summaryTabBtns.forEach((btn) => btn.addEventListener('click', () => switchSummaryTab(btn.dataset.tab)));
+        videoUrlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                extractVideoInfo();
+            }
+        });
+
+        // 页面初始化
+        // 页面初始化完成
+
+        // 提取视频信息
+        async function extractVideoInfo() {
+            const rawInput = videoUrlInput.value.trim();
+            const url = extractFirstUrl(rawInput);
+            if (!url) {
+                alert('请输入视频URL');
+                return;
+            }
+            // 规范化输入框内容，方便用户看到真实链接
+            if (rawInput !== url) {
+                videoUrlInput.value = url;
+            }
+
+            // 显示加载动画
+            loadingAnimation.classList.remove('hidden');
+            contentWorkspace.classList.remove('hidden');
+            videoPlayerPanel.classList.add('hidden');
+            videoInfo.classList.add('hidden');
+            formatSelector.classList.add('hidden');
+            downloadProgress.classList.add('hidden');
+            downloadComplete.classList.add('hidden');
+            // 右侧总结模块常驻（解析后可直接点“视频总结”）
+            summarySection.classList.remove('hidden');
+            document.getElementById('summary-empty-hint')?.classList.remove('hidden');
+
+            try {
+                const response = await fetch('http://localhost:8001/api/extract', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url })
+                });
+
+                if (!response.ok) {
+                    const err = await safeReadError(response);
+                    throw new Error(err || '解析失败');
+                }
+
+                const data = await response.json();
+                currentVideoInfo = data;
+                currentResolvedUrl = url;
+
+                // 显示视频信息
+                videoThumbnail.src = data.thumbnail || 'https://via.placeholder.com/300x200?text=No+Thumbnail';
+                videoPreviewImage.src = data.thumbnail || 'https://via.placeholder.com/1280x720?text=No+Preview';
+                videoPreviewImage.classList.remove('hidden');
+                videoPreviewPlaceholder.classList.add('hidden');
+                videoPreviewTitle.textContent = data.title || '';
+                videoPlayerPanel.classList.remove('hidden');
+                videoTitle.textContent = data.title;
+                videoUploader.textContent = data.uploader;
+                videoDuration.textContent = formatDuration(data.duration);
+                videoViews.textContent = formatViews(data.view_count);
+
+                // 显示格式选择器
+                renderFormatList(data.formats);
+
+                // 隐藏加载动画，显示视频信息
+                loadingAnimation.classList.add('hidden');
+                videoInfo.classList.remove('hidden');
+                formatSelector.classList.remove('hidden');
+
+            } catch (error) {
+                console.error('提取视频信息失败:', error);
+                loadingAnimation.classList.add('hidden');
+                alert(String(error.message || error));
+            }
+        }
+
+        // 渲染格式列表
+        function renderFormatList(formats) {
+            formatList.innerHTML = '';
+
+            // 按分辨率降序排序，视频格式优先于音频格式
+            const videoFormats = formats
+                .sort((a, b) => {
+                    // 视频格式优先
+                    if ((a.vcodec && a.vcodec !== 'none') && !(b.vcodec && b.vcodec !== 'none')) return -1;
+                    if (!(a.vcodec && a.vcodec !== 'none') && (b.vcodec && b.vcodec !== 'none')) return 1;
+                    // 按分辨率排序
+                    return (b.height || 0) - (a.height || 0);
+                });
+
+            videoFormats.forEach(format => {
+                const isVideo = (format.vcodec && format.vcodec !== 'none');
+                const isAudio = (format.acodec && format.acodec !== 'none') && (!isVideo);
+                const resolution = (format.width && format.height) ? `${format.width}×${format.height}` : '仅音频';
+                const fps = format.fps ? `${Number(format.fps).toFixed(3)}fps` : '';
+                const sizeText = format.filesize ? formatFileSize(format.filesize) : '未知大小';
+                const codecText = isVideo ? (format.vcodec || '') : (format.acodec || '');
+                const tagClass = isAudio ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-blue-50 text-blue-700 border-blue-200';
+                const tagText = isAudio ? '音频' : '视频';
+
+                const card = document.createElement('div');
+                card.className = 'group border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow';
+                card.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${tagClass}">
+                                    ${tagText}
+                                </span>
+                                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">${format.ext || ''}</span>
+                            </div>
+                            <div class="text-lg font-bold text-gray-900 leading-snug">${resolution}</div>
+                            <div class="text-sm text-gray-600 mt-1">
+                                <span class="font-medium">${sizeText}</span>
+                                ${fps ? `<span class="mx-2 text-gray-300">•</span><span>${fps}</span>` : ''}
+                            </div>
+                            ${codecText ? `<div class="text-xs text-gray-500 mt-2 truncate">codec: ${codecText}</div>` : ''}
+                        </div>
+
+                        <button class="download-btn shrink-0 bg-primary text-white px-3 py-2 rounded-md font-bold hover:bg-blue-700 transition-colors inline-flex items-center"
+                                data-format-id="${format.format_id}"
+                                title="下载该格式">
+                            <i class="fa fa-download mr-2"></i>
+                            下载
+                        </button>
+                    </div>
+                `;
+
+                formatList.appendChild(card);
+            });
+
+            // 添加下载按钮事件监听器
+            document.querySelectorAll('.download-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const formatId = e.currentTarget.dataset.formatId;
+                    downloadVideo(formatId);
+                });
+            });
+        }
+
+        // 下载视频
+        async function downloadVideo(formatId) {
+            if (!currentVideoInfo) return;
+
+            // 显示下载进度
+            downloadProgress.classList.remove('hidden');
+            downloadComplete.classList.add('hidden');
+            progressBar.style.width = '0%';
+            progressPercentage.textContent = '0%';
+            progressText.textContent = '准备下载...';
+            downloadSpeed.textContent = '0 KB/s';
+            timeRemaining.textContent = '--:--';
+
+            try {
+                const url = currentResolvedUrl || extractFirstUrl(videoUrlInput.value.trim());
+                if (!url) {
+                    alert('请输入视频URL');
+                    return;
+                }
+                const response = await fetch(`http://localhost:8001/api/download?url=${encodeURIComponent(url)}&format_id=${formatId}`, {
+                    method: 'GET'
+                });
+
+                if (!response.ok) {
+                    const err = await safeReadError(response);
+                    throw new Error(err || '下载失败');
+                }
+
+                const data = await response.json();
+                currentDownloadResult = data;
+
+                // 模拟下载进度
+                simulateDownloadProgress();
+
+                // 显示下载完成
+                setTimeout(() => {
+                    clearInterval(downloadInterval);
+                    downloadProgress.classList.add('hidden');
+                    completeMessage.textContent = `视频 "${data.title}" 已成功下载`;
+                    downloadComplete.classList.remove('hidden');
+                }, 3000);
+
+            } catch (error) {
+                console.error('下载视频失败:', error);
+                clearInterval(downloadInterval);
+                alert(String(error.message || error));
+            }
+        }
+
+        async function safeReadError(response) {
+            try {
+                const ct = response.headers.get('content-type') || '';
+                if (ct.includes('application/json')) {
+                    const j = await response.json();
+                    return j.detail || JSON.stringify(j);
+                }
+                return await response.text();
+            } catch {
+                return '';
+            }
+        }
+
+        // 从输入中提取第一个可用URL（兼容抖音分享文案）
+        function extractFirstUrl(input) {
+            const s = (input || '').trim();
+            if (!s) return '';
+            const stripTail = (u) => String(u || '').trim().replace(/[)\],.;:!?}"'>，。！？；：、】）》）】>]+$/g, '');
+            // 直接就是 http(s)
+            if (/^https?:\/\//i.test(s)) return stripTail(s);
+            // 从文案中找链接
+            const m = s.match(/https?:\/\/[^\s"'<>]+/i);
+            if (m && m[0]) return stripTail(m[0]);
+            // 兼容 v.douyin.com/xxxxx 这种不带协议的情况
+            const m2 = s.match(/\b(v\.douyin\.com\/[A-Za-z0-9]+)\b/i);
+            if (m2 && m2[1]) return `https://${m2[1]}`;
+            return '';
+        }
+
+        // 模拟下载进度
+        function simulateDownloadProgress() {
+            let progress = 0;
+            const totalSize = 100000000; // 模拟100MB文件
+            let downloaded = 0;
+            let lastDownloaded = 0;
+            let lastTime = Date.now();
+
+            downloadInterval = setInterval(() => {
+                const now = Date.now();
+                const timeElapsed = (now - lastTime) / 1000;
+                
+                // 模拟下载速度（波动）
+                const speed = Math.random() * 5 + 5; // 5-10 MB/s
+                const bytesDownloaded = speed * 1024 * 1024 * timeElapsed;
+                
+                downloaded += bytesDownloaded;
+                progress = Math.min(100, (downloaded / totalSize) * 100);
+                
+                // 计算实际速度
+                const actualSpeed = (downloaded - lastDownloaded) / timeElapsed / 1024;
+                
+                // 更新UI
+                progressBar.style.width = `${progress}%`;
+                progressPercentage.textContent = `${Math.round(progress)}%`;
+                progressText.textContent = `正在下载...`;
+                downloadSpeed.textContent = `${actualSpeed.toFixed(1)} KB/s`;
+                
+                // 计算剩余时间
+                if (actualSpeed > 0) {
+                    const remainingBytes = totalSize - downloaded;
+                    const remainingTime = remainingBytes / (actualSpeed * 1024);
+                    timeRemaining.textContent = formatTime(remainingTime);
+                }
+                
+                lastDownloaded = downloaded;
+                lastTime = now;
+
+                if (progress >= 100) {
+                    clearInterval(downloadInterval);
+                }
+            }, 1000);
+        }
+
+        async function summarizeVideo() {
+            const rawInput = videoUrlInput.value.trim();
+            const url = currentResolvedUrl || extractFirstUrl(rawInput);
+            if (!url) {
+                alert('请输入视频URL');
+                return;
+            }
+            summarySection.classList.remove('hidden');
+            contentWorkspace.classList.remove('hidden');
+            summaryStatus.textContent = '正在创建总结任务...';
+            setSummaryProgress(5, '创建任务');
+            document.getElementById('summary-empty-hint')?.classList.add('hidden');
+            summaryList.innerHTML = '';
+            chapterList.innerHTML = '';
+            highlightList.innerHTML = '';
+            transcriptSource.textContent = '-';
+            transcriptBox.textContent = '';
+            mindmapRoot.innerHTML = '';
+            mindmapMermaid.innerHTML = '';
+            currentMindmap = null;
+            currentMindmapMmd = '';
+            currentSummaryTitle = '';
+            metaSource.textContent = '-';
+            metaDuration.textContent = '-';
+            metaSummaryCount.textContent = '0';
+            metaMindmapCount.textContent = '0';
+            mindmapSearch.value = '';
+            qaAnswer.textContent = '';
+            downloadMdBtn.classList.add('hidden');
+            currentSummaryTaskId = '';
+            switchSummaryTab('summary');
+
+            try {
+                const resp = await fetch('http://localhost:8001/api/summarize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                if (!resp.ok) {
+                    const err = await safeReadError(resp);
+                    throw new Error(err || '创建总结任务失败');
+                }
+                const { task_id } = await resp.json();
+                currentSummaryTaskId = task_id;
+                summaryStatus.textContent = '任务已创建，正在总结中...';
+                setSummaryProgress(10, '任务已创建');
+                await pollSummaryTask(task_id);
+            } catch (error) {
+                summaryStatus.textContent = `总结失败：${String(error.message || error)}`;
+                setSummaryProgress(100, '失败');
+            }
+        }
+
+        async function pollSummaryTask(taskId) {
+            const maxPoll = 120;
+            for (let i = 0; i < maxPoll; i++) {
+                const resp = await fetch(`http://localhost:8001/api/summarize/${encodeURIComponent(taskId)}`);
+                if (!resp.ok) {
+                    const err = await safeReadError(resp);
+                    throw new Error(err || '查询总结任务失败');
+                }
+                const data = await resp.json();
+                if (data.status === 'completed') {
+                    setSummaryProgress(100, '完成');
+                    renderSummaryResult(data.result || {});
+                    return;
+                }
+                if (data.status === 'failed') {
+                    setSummaryProgress(100, '失败');
+                    throw new Error(data.error || '总结任务失败');
+                }
+                summaryStatus.textContent = `总结处理中：${mapSummaryStage(data.stage)} (${i + 1})`;
+                updateSummaryProgressByStage(data.stage, i + 1, maxPoll);
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+            throw new Error('总结超时，请稍后重试');
+        }
+
+        function renderSummaryResult(result) {
+            summaryStatus.textContent = `总结完成（${result.provider || '-'} / ${result.model || '-'})`;
+            currentSummaryTitle = String(result.title || 'mindmap').trim();
+
+            const summaryItems = result.summary || [];
+            summaryList.innerHTML = summaryItems.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+
+            const chapters = result.chapters || [];
+            chapterList.innerHTML = chapters.map(ch => {
+                const points = (ch.points || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+                return `
+                    <div class="border border-gray-200 rounded-lg p-3">
+                        <div class="font-medium mb-1">${formatDuration(ch.start || 0)} - ${formatDuration(ch.end || 0)} | ${escapeHtml(ch.title || '')}</div>
+                        <ul class="list-disc pl-5">${points}</ul>
+                    </div>
+                `;
+            }).join('');
+
+            const highlights = result.highlights || [];
+            highlightList.innerHTML = highlights.map((h, idx) => `<li id="hl-${idx}" data-ts="${Number(h.ts || 0)}">[${formatDuration(h.ts || 0)}] ${escapeHtml(h.text || '')}</li>`).join('');
+
+            if (result.markdown_download_url) {
+                downloadMdBtn.href = `http://localhost:8001${result.markdown_download_url}`;
+                downloadMdBtn.classList.remove('hidden');
+            }
+
+            transcriptSource.textContent = result.transcript_source || '-';
+            transcriptBox.textContent = result.transcript_text || '';
+            renderMindmap(result.mindmap || {});
+            metaSource.textContent = result.transcript_source || '-';
+            metaDuration.textContent = formatDuration(result.duration || 0);
+            metaSummaryCount.textContent = String((result.summary || []).length);
+            metaMindmapCount.textContent = String(countMindmapNodes(result.mindmap || {}));
+        }
+
+        function renderMindmap(mindmap) {
+            currentMindmap = mindmap || {};
+            const title = escapeHtml(mindmap.title || '视频主题');
+            const children = Array.isArray(mindmap.children) ? mindmap.children : [];
+            const childHtml = renderMindmapNodes(children, 1);
+            mindmapRoot.innerHTML = `
+                <div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                    <div class="font-semibold text-gray-800 mb-2">${title}</div>
+                    ${childHtml || '<div class="text-sm text-gray-500">暂无导图结构</div>'}
+                </div>
+            `;
+            bindMindmapInteractions();
+            toggleAllMindmapNodes(false);
+            renderMermaidMindmap();
+            renderEditableMindmap(currentMindmap || {});
+            switchMindmapView('editor');
+        }
+
+        function switchMindmapView(mode) {
+            const isEditor = mode === 'editor';
+            const isTree = mode === 'tree';
+            const isMermaid = mode === 'mermaid';
+            mindmapEditorWrap.classList.toggle('hidden', !isEditor);
+            mindmapRoot.classList.toggle('hidden', !isTree);
+            mindmapMermaidWrap.classList.toggle('hidden', !isMermaid);
+            mindmapViewEditorBtn.classList.toggle('bg-blue-50', isEditor);
+            mindmapViewTreeBtn.classList.toggle('bg-blue-50', isTree);
+            mindmapViewMermaidBtn.classList.toggle('bg-blue-50', isMermaid);
+        }
+
+        function renderEditableMindmap(mindmap) {
+            if (!window.jsMind) return;
+            const container = document.getElementById('jsmind_container');
+            if (!container) return;
+            container.innerHTML = '';
+            const data = buildJsMindData(mindmap || {});
+            const options = {
+                container: 'jsmind_container',
+                editable: true,
+                theme: 'primary',
+                mode: 'full',
+                support_html: true
+            };
+            jm = new jsMind(options);
+            jm.show(data);
+        }
+
+        function buildJsMindData(mindmap) {
+            const rootTitle = String(mindmap?.title || '视频主题');
+            const convert = (node) => {
+                const id = String(node.id || `n${++mindmapNodeSeq}`);
+                const start = Number(node.start || 0);
+                const end = Number(node.end || start);
+                const timeTag = `[${formatDuration(start)}-${formatDuration(end)}]`;
+                const topic = `${String(node.name || '节点')} ${timeTag}`.trim();
+                const children = (Array.isArray(node.children) ? node.children : []).map(convert);
+                return { id, topic, children };
+            };
+            const children = (Array.isArray(mindmap?.children) ? mindmap.children : []).map(convert);
+            return {
+                meta: { name: 'video-mindmap', author: 'aimovie', version: '1.0' },
+                format: 'node_tree',
+                data: { id: 'root', topic: rootTitle, children }
+            };
+        }
+
+        function getSelectedNodeOrWarn() {
+            if (!jm) return null;
+            const node = jm.get_selected_node();
+            if (!node) {
+                summaryStatus.textContent = '请先在导图里选择一个节点';
+                return null;
+            }
+            return node;
+        }
+
+        function addMindmapChildNode() {
+            const selected = getSelectedNodeOrWarn();
+            if (!selected) return;
+            const topic = prompt('请输入子节点名称：', '新节点');
+            if (!topic) return;
+            const id = `n${++mindmapNodeSeq}`;
+            jm.add_node(selected, id, topic);
+        }
+
+        function addMindmapSiblingNode() {
+            const selected = getSelectedNodeOrWarn();
+            if (!selected || !selected.parent) return;
+            const topic = prompt('请输入同级节点名称：', '新同级节点');
+            if (!topic) return;
+            const id = `n${++mindmapNodeSeq}`;
+            jm.add_node(selected.parent, id, topic);
+        }
+
+        function renameMindmapNode() {
+            const selected = getSelectedNodeOrWarn();
+            if (!selected) return;
+            const topic = prompt('请输入新名称：', selected.topic || '');
+            if (!topic) return;
+            jm.update_node(selected.id, topic);
+        }
+
+        function deleteMindmapNode() {
+            const selected = getSelectedNodeOrWarn();
+            if (!selected) return;
+            if (selected.id === 'root') {
+                summaryStatus.textContent = '根节点不能删除';
+                return;
+            }
+            const ok = confirm(`确认删除节点「${selected.topic || ''}」吗？`);
+            if (!ok) return;
+            jm.remove_node(selected);
+        }
+
+        function switchSummaryTab(tabName) {
+            const panels = ['summary', 'chapters', 'highlights', 'transcript', 'mindmap', 'qa'];
+            panels.forEach((name) => {
+                const panel = document.getElementById(`tab-${name}`);
+                if (!panel) return;
+                panel.classList.toggle('hidden', name !== tabName);
+            });
+            summaryTabBtns.forEach((btn) => {
+                const active = btn.dataset.tab === tabName;
+                btn.classList.toggle('bg-blue-50', active);
+                btn.classList.toggle('bg-white', !active);
+            });
+        }
+
+        function countMindmapNodes(mindmap) {
+            let count = 0;
+            const walk = (nodes) => {
+                for (const n of (nodes || [])) {
+                    count += 1;
+                    walk(Array.isArray(n.children) ? n.children : []);
+                }
+            };
+            walk(Array.isArray(mindmap.children) ? mindmap.children : []);
+            return count;
+        }
+
+        async function renderMermaidMindmap() {
+            const mmd = buildMermaidMmd(currentMindmap || {});
+            currentMindmapMmd = mmd;
+            if (!mmd.trim()) {
+                mindmapMermaid.innerHTML = '<div class="text-sm text-gray-500">暂无 Mermaid 导图</div>';
+                return;
+            }
+            if (!window.mermaid) {
+                mindmapMermaid.textContent = mmd;
+                return;
+            }
+            try {
+                mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+                const id = `mindmap-mermaid-${Date.now()}`;
+                const out = await mermaid.render(id, mmd);
+                mindmapMermaid.innerHTML = out.svg;
+                resetMermaidZoom();
+            } catch (e) {
+                mindmapMermaid.innerHTML = `<pre class="text-xs text-gray-700 whitespace-pre-wrap">${escapeHtml(mmd)}</pre>`;
+            }
+        }
+
+        function applyMermaidZoom() {
+            const svg = mindmapMermaid.querySelector('svg');
+            if (!svg) return;
+            svg.style.transformOrigin = 'top left';
+            svg.style.transform = `scale(${mermaidZoom})`;
+        }
+
+        function zoomMermaid(delta) {
+            mermaidZoom = Math.min(2.2, Math.max(0.5, mermaidZoom + delta));
+            applyMermaidZoom();
+        }
+
+        function resetMermaidZoom() {
+            mermaidZoom = 1;
+            applyMermaidZoom();
+        }
+
+        function buildMermaidMmd(mindmap) {
+            const title = sanitizeMermaidLabel(mindmap?.title || '视频主题');
+            const lines = ['mindmap', `  root((${title}))`];
+            const walk = (nodes, depth) => {
+                for (const node of (nodes || [])) {
+                    const start = Number(node.start || 0);
+                    const end = Number(node.end || start);
+                    const name = sanitizeMermaidLabel(node.name || '节点');
+                    const label = `${name} [${formatDuration(start)}-${formatDuration(end)}]`;
+                    lines.push(`${'  '.repeat(depth)}${label}`);
+                    walk(Array.isArray(node.children) ? node.children : [], depth + 1);
+                }
+            };
+            walk(Array.isArray(mindmap?.children) ? mindmap.children : [], 2);
+            return lines.join('\n');
+        }
+
+        function sanitizeMermaidLabel(v) {
+            return String(v || '')
+                .replace(/"/g, '\\"')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .trim();
+        }
+
+        function downloadMermaidMmd() {
+            if (!currentMindmapMmd) {
+                summaryStatus.textContent = '暂无可下载的 Mermaid 导图';
+                return;
+            }
+            const blob = new Blob([currentMindmapMmd], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${sanitizeFilename(currentSummaryTitle || 'mindmap')}.mmd`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function copyMermaidMmd() {
+            if (!currentMindmapMmd) {
+                summaryStatus.textContent = '暂无可复制的 Mermaid 内容';
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(currentMindmapMmd);
+                summaryStatus.textContent = 'Mermaid 文本已复制到剪贴板';
+            } catch (e) {
+                summaryStatus.textContent = '复制失败，请手动复制 Mermaid 视图内容';
+            }
+        }
+
+        function sanitizeFilename(name) {
+            return String(name || 'mindmap')
+                .replace(/[\\/:*?"<>|]/g, '_')
+                .replace(/\s+/g, '_')
+                .slice(0, 80) || 'mindmap';
+        }
+
+        function filterMindmap(keyword) {
+            const q = String(keyword || '').trim().toLowerCase();
+            const nodes = Array.from(mindmapRoot.querySelectorAll('.mindmap-node'));
+            const items = Array.from(mindmapRoot.querySelectorAll('li[data-depth]'));
+            nodes.forEach((n) => n.classList.remove('ring-2', 'ring-amber-300', 'bg-amber-50'));
+            if (!q) {
+                items.forEach((li) => li.classList.remove('hidden'));
+                toggleAllMindmapNodes(false);
+                return;
+            }
+            items.forEach((li) => li.classList.add('hidden'));
+            nodes.forEach((nodeBtn) => {
+                const text = (nodeBtn.textContent || '').toLowerCase();
+                if (!text.includes(q)) return;
+                nodeBtn.classList.add('ring-2', 'ring-amber-300', 'bg-amber-50');
+                let li = nodeBtn.closest('li[data-depth]');
+                while (li) {
+                    li.classList.remove('hidden');
+                    const parentLi = li.parentElement?.closest('li[data-depth]');
+                    const toggleBtn = parentLi?.querySelector(':scope > div .mindmap-toggle');
+                    const children = parentLi?.querySelector(':scope > .mindmap-children');
+                    if (toggleBtn && children) {
+                        toggleBtn.dataset.open = '1';
+                        toggleBtn.textContent = '-';
+                        children.classList.remove('hidden');
+                    }
+                    li = parentLi;
+                }
+            });
+        }
+
+        function renderMindmapNodes(nodes, depth) {
+            if (!nodes || !nodes.length) return '';
+            const items = nodes.map((node) => {
+                const name = escapeHtml(node.name || '未命名节点');
+                const start = Number(node.start || 0);
+                const end = Number(node.end || start);
+                const importance = Number(node.importance || 3);
+                const children = Array.isArray(node.children) ? node.children : [];
+                const hasChildren = children.length > 0;
+                const childrenHtml = renderMindmapNodes(children, depth + 1);
+                const collapsedClass = depth >= 2 ? ' hidden' : '';
+                return `
+                    <li class="mb-2" data-depth="${depth}">
+                        <div class="flex items-center gap-2">
+                            ${hasChildren ? `<button class="mindmap-toggle text-xs w-5 h-5 border border-gray-300 rounded bg-white" data-open="${depth < 2 ? '1' : '0'}">${depth < 2 ? '-' : '+'}</button>` : '<span class="inline-block w-5 h-5"></span>'}
+                            <button class="mindmap-node text-left inline-block px-2 py-1 bg-white border border-gray-200 rounded hover:bg-blue-50" data-start="${start}" data-end="${end}">
+                                ${name}
+                            </button>
+                            <span class="text-xs text-gray-500">[${formatDuration(start)}-${formatDuration(end)}] P${importance}</span>
+                        </div>
+                        ${hasChildren ? `<ul class="list-disc pl-7 mt-2 mindmap-children${collapsedClass}">${childrenHtml}</ul>` : ''}
+                    </li>
+                `;
+            }).join('');
+            return items;
+        }
+
+        function bindMindmapInteractions() {
+            mindmapRoot.querySelectorAll('.mindmap-toggle').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const current = e.currentTarget;
+                    const li = current.closest('li');
+                    if (!li) return;
+                    const children = li.querySelector(':scope > .mindmap-children');
+                    if (!children) return;
+                    const isOpen = current.dataset.open === '1';
+                    current.dataset.open = isOpen ? '0' : '1';
+                    current.textContent = isOpen ? '+' : '-';
+                    children.classList.toggle('hidden', isOpen);
+                });
+            });
+            mindmapRoot.querySelectorAll('.mindmap-node').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const start = Number(e.currentTarget.dataset.start || 0);
+                    jumpToTimestamp(start);
+                });
+            });
+        }
+
+        function toggleAllMindmapNodes(expand) {
+            mindmapRoot.querySelectorAll('.mindmap-toggle').forEach((btn) => {
+                const li = btn.closest('li');
+                if (!li) return;
+                const depth = Number(li.dataset.depth || 1);
+                const children = li.querySelector(':scope > .mindmap-children');
+                if (!children) return;
+                const shouldOpen = expand || depth < 2;
+                btn.dataset.open = shouldOpen ? '1' : '0';
+                btn.textContent = shouldOpen ? '-' : '+';
+                children.classList.toggle('hidden', !shouldOpen);
+            });
+        }
+
+        function jumpToTimestamp(start) {
+            const highlights = Array.from(document.querySelectorAll('#highlight-list li'));
+            if (!highlights.length) {
+                summaryStatus.textContent = `定位时间点：${formatDuration(start)}（暂无高亮可跳转）`;
+                return;
+            }
+            let target = highlights[0];
+            let bestDelta = Math.abs(Number(target.dataset.ts || 0) - start);
+            for (const li of highlights) {
+                const delta = Math.abs(Number(li.dataset.ts || 0) - start);
+                if (delta < bestDelta) {
+                    bestDelta = delta;
+                    target = li;
+                }
+            }
+            highlights.forEach((li) => li.classList.remove('bg-yellow-100'));
+            target.classList.add('bg-yellow-100');
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            summaryStatus.textContent = `已定位到时间点：${formatDuration(start)}`;
+        }
+
+        async function askSummaryQuestion() {
+            const question = (qaQuestion.value || '').trim();
+            if (!currentSummaryTaskId) {
+                qaAnswer.textContent = '请先完成一次视频总结。';
+                return;
+            }
+            if (!question) {
+                qaAnswer.textContent = '请输入问题。';
+                return;
+            }
+            qaAskBtn.disabled = true;
+            qaAnswer.textContent = 'AI 思考中...';
+            try {
+                const resp = await fetch(`http://localhost:8001/api/summarize/${encodeURIComponent(currentSummaryTaskId)}/qa`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+                if (!resp.ok) {
+                    const err = await safeReadError(resp);
+                    throw new Error(err || '问答失败');
+                }
+                const data = await resp.json();
+                qaAnswer.textContent = data.answer || '暂无回答';
+            } catch (error) {
+                qaAnswer.textContent = `问答失败：${String(error.message || error)}`;
+            } finally {
+                qaAskBtn.disabled = false;
+            }
+        }
+
+        function mapSummaryStage(stage) {
+            const mapping = {
+                pending: '排队中',
+                normalizing_url: '解析链接',
+                extracting_transcript: '提取字幕/转写',
+                calling_llm: '生成结构化总结',
+                rendering_markdown: '导出 Markdown',
+                completed: '已完成',
+                failed: '失败'
+            };
+            return mapping[stage] || '处理中';
+        }
+
+        function updateSummaryProgressByStage(stage, tick, maxTick) {
+            const stageProgress = {
+                pending: 8,
+                normalizing_url: 15,
+                extracting_transcript: 45,
+                calling_llm: 80,
+                rendering_markdown: 92,
+                completed: 100,
+                failed: 100
+            };
+            let p = stageProgress[stage] || 20;
+            if (stage === 'extracting_transcript') {
+                // 转写阶段通常耗时最长，给一个平滑增长感。
+                p = Math.min(70, p + Math.floor((tick / Math.max(1, maxTick)) * 25));
+            }
+            setSummaryProgress(p, mapSummaryStage(stage));
+        }
+
+        function setSummaryProgress(percentage, text) {
+            const p = Math.max(0, Math.min(100, Number(percentage) || 0));
+            summaryProgressBar.style.width = `${p}%`;
+            summaryProgressPercentage.textContent = `${p}%`;
+            if (text) {
+                summaryProgressText.textContent = text;
+            }
+            if (text === '失败') {
+                summaryProgressBar.classList.remove('bg-emerald-600');
+                summaryProgressBar.classList.add('bg-red-500');
+            } else {
+                summaryProgressBar.classList.remove('bg-red-500');
+                summaryProgressBar.classList.add('bg-emerald-600');
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // 辅助函数：格式化时长
+        function formatDuration(seconds) {
+            const totalSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const remainingSeconds = totalSeconds % 60;
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+            }
+            return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+        }
+
+        // 辅助函数：格式化观看次数
+        function formatViews(views) {
+            if (views >= 1000000) {
+                return `${(views / 1000000).toFixed(1)}M`;
+            } else if (views >= 1000) {
+                return `${(views / 1000).toFixed(1)}K`;
+            }
+            return views.toString();
+        }
+
+        // 辅助函数：格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes >= 1024 * 1024 * 1024) {
+                return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+            } else if (bytes >= 1024 * 1024) {
+                return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+            } else if (bytes >= 1024) {
+                return `${(bytes / 1024).toFixed(2)} KB`;
+            }
+            return `${bytes} B`;
+        }
+
+        // 辅助函数：格式化时间
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // 下载文件按钮事件
+        downloadFileBtn.addEventListener('click', () => {
+            if (currentDownloadResult && currentDownloadResult.file_path) {
+                // 调用文件下载接口
+                window.location.href = `http://localhost:8001/api/download/file?file_path=${encodeURIComponent(currentDownloadResult.file_path)}`;
+            } else {
+                alert('没有可下载的文件');
+            }
+        });
+    </script>
+</body>
+</html>

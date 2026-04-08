@@ -13,6 +13,7 @@ temp_dir = os.path.join(os.getcwd(), 'temp')
 os.makedirs(temp_dir, exist_ok=True)
 cookie_file_path = os.path.join(temp_dir, "cookies.txt")
 BROWSER_COOKIE_CANDIDATES = ("edge", "chrome", "chromium", "firefox")
+_URL_TRAILING_CHARS = ")]},.;:!?\"'，。！？；：、】）》）】>"
 
 
 def format_duration(seconds: float) -> str:
@@ -69,14 +70,17 @@ def check_ffmpeg_available() -> bool:
 
 
 def normalize_input_to_url(s: str) -> str:
+    def _strip_trailing(url: str) -> str:
+        return (url or "").strip().rstrip(_URL_TRAILING_CHARS)
+
     s = (s or "").strip()
     if not s:
         return ""
     if re.match(r"^https?://", s, flags=re.IGNORECASE):
-        return s
+        return _strip_trailing(s)
     m = re.search(r"(https?://[^\s\"'<>]+)", s, flags=re.IGNORECASE)
     if m:
-        return m.group(1).rstrip(").,;]}>\"'")
+        return _strip_trailing(m.group(1))
     m2 = re.search(r"\b(v\.douyin\.com/[A-Za-z0-9]+)\b", s, flags=re.IGNORECASE)
     if m2:
         return "https://" + m2.group(1)
