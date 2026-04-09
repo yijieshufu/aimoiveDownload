@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import json
 import os
@@ -9,8 +9,29 @@ import urllib.parse
 
 from .downloader import extract_video_info, download_video, normalize_input_to_url
 from .douyin_parser import is_douyin_url, parse_douyin_url
-from .summarizer import create_summary_task, get_summary_task, ask_summary_question, translate_summary
-from .workspace_store import get_tabs, save_tabs, get_mindmap, save_mindmap, init_workspace_store
+from .summarizer import (
+    create_summary_task,
+    create_summary_task_with_options,
+    get_summary_task,
+    ask_summary_question,
+    translate_summary,
+    get_task_subtitle_segments,
+    build_task_subtitle_file,
+    stream_summary_task,
+    chat_with_summary,
+)
+from .workspace_store import (
+    get_tabs,
+    save_tabs,
+    get_mindmap,
+    save_mindmap,
+    init_workspace_store,
+    append_chat_message,
+    get_chat_messages,
+    get_summary_edit,
+    save_summary_edit,
+    delete_summary_edit,
+)
 
 app = FastAPI(
     title="Video Downloader API",
@@ -81,9 +102,10 @@ async def start_summarize(request: Request):
     try:
         data = await request.json()
         url = data.get("url")
+        stream = bool(data.get("stream") or False)
         if not url:
             raise Exception("缺少URL参数")
-        task_id = create_summary_task(url)
+        task_id = create_summary_task_with_options(url, start_thread=(not stream))
         return {"task_id": task_id, "status": "pending"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -117,6 +139,18 @@ async def summarize_status(task_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.get("/api/summarize/{task_id}/stream")
+async def summarize_stream(task_id: str):
+    def gen():
+        for item in stream_summary_task(task_id):
+            event = item.get("event") or "message"
+            data = json.dumps(item.get("data") or {}, ensure_ascii=False)
+            yield f"event: {event}\n"
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 @app.post("/api/summarize/{task_id}/qa")
 async def summarize_qa(task_id: str, request: Request):
     """
@@ -127,6 +161,25 @@ async def summarize_qa(task_id: str, request: Request):
         question = data.get("question")
         result = ask_summary_question(task_id, question)
         return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/summarize/{task_id}/chat")
+async def summarize_chat(task_id: str, request: Request):
+    """
+    多轮对话：保存本轮用户消息，并基于当前任务字幕上下文生成回复。
+    """
+    try:
+        data = await request.json()
+        message = str(data.get("message") or "").strip()
+        if not message:
+            raise Exception("message 不能为空")
+        append_chat_message(task_id, "user", message)
+        history = get_chat_messages(task_id, limit=30)
+        resp = chat_with_summary(task_id, history)
+        append_chat_message(task_id, "assistant", resp.get("answer") or "")
+        return {"task_id": task_id, "messages": get_chat_messages(task_id, limit=60), "answer": resp.get("answer") or ""}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -175,6 +228,66 @@ async def put_task_mindmap(task_id: str, request: Request):
     try:
         data = await request.json()
         return save_mindmap(task_id, data.get("mindmap") or {})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/summarize/{task_id}/summary-edit")
+async def get_task_summary_edit(task_id: str):
+    try:
+        row = get_summary_edit(task_id)
+        if not row:
+            return {"task_id": task_id, "sections": None, "updated_at": None}
+        return {"task_id": task_id, "sections": row["sections"], "updated_at": row["updated_at"]}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/summarize/{task_id}/summary-edit")
+async def put_task_summary_edit(task_id: str, request: Request):
+    try:
+        data = await request.json()
+        sections = data.get("sections")
+        if not isinstance(sections, dict):
+            raise Exception("sections 必须为对象")
+        return save_summary_edit(task_id, sections)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/summarize/{task_id}/summary-edit")
+async def delete_task_summary_edit(task_id: str):
+    try:
+        delete_summary_edit(task_id)
+        return {"task_id": task_id, "ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/summarize/{task_id}/subtitles")
+async def summarize_subtitles(task_id: str):
+    try:
+        return get_task_subtitle_segments(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/summarize/{task_id}/subtitles/download")
+async def summarize_subtitles_download(task_id: str, format: str = "srt"):
+    try:
+        out_path = build_task_subtitle_file(task_id, format)
+        from fastapi.responses import FileResponse
+
+        media_type = "text/plain"
+        if format == "srt":
+            media_type = "application/x-subrip"
+        if format == "vtt":
+            media_type = "text/vtt"
+        return FileResponse(
+            path=os.path.realpath(out_path),
+            filename=os.path.basename(out_path),
+            media_type=media_type,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

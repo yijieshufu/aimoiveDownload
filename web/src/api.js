@@ -42,6 +42,20 @@ export async function apiSummarize(url) {
   return await resp.json();
 }
 
+export async function apiSummarizeStreamCreate(url) {
+  const resp = await fetch(`${API_BASE}/api/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, stream: true }),
+  });
+  if (!resp.ok) throw new Error((await readError(resp)) || '创建流式总结任务失败');
+  return await resp.json();
+}
+
+export function apiSummarizeStreamUrl(taskId) {
+  return `${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/stream`;
+}
+
 export async function apiSummarizeStatus(taskId) {
   const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}`, {
     method: 'GET',
@@ -57,6 +71,16 @@ export async function apiSummarizeQa(taskId, question) {
     body: JSON.stringify({ question }),
   });
   if (!resp.ok) throw new Error((await readError(resp)) || '问答失败');
+  return await resp.json();
+}
+
+export async function apiSummarizeChat(taskId, message) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  if (!resp.ok) throw new Error((await readError(resp)) || 'chat failed');
   return await resp.json();
 }
 
@@ -94,6 +118,32 @@ export async function apiSaveMindmap(taskId, mindmap) {
   return await resp.json();
 }
 
+export async function apiGetSummaryEdit(taskId) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/summary-edit`, {
+    method: 'GET',
+  });
+  if (!resp.ok) throw new Error((await readError(resp)) || 'load summary edit failed');
+  return await resp.json();
+}
+
+export async function apiSaveSummaryEdit(taskId, sections) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/summary-edit`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sections }),
+  });
+  if (!resp.ok) throw new Error((await readError(resp)) || 'save summary edit failed');
+  return await resp.json();
+}
+
+export async function apiDeleteSummaryEdit(taskId) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/summary-edit`, {
+    method: 'DELETE',
+  });
+  if (!resp.ok) throw new Error((await readError(resp)) || 'delete summary edit failed');
+  return await resp.json();
+}
+
 export async function apiTranslateSummary(taskId, targetLanguage = 'zh') {
   const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/translate`, {
     method: 'POST',
@@ -102,6 +152,16 @@ export async function apiTranslateSummary(taskId, targetLanguage = 'zh') {
   });
   if (!resp.ok) throw new Error((await readError(resp)) || 'translate failed');
   return await resp.json();
+}
+
+export async function apiGetSubtitles(taskId) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/subtitles`, { method: 'GET' });
+  if (!resp.ok) throw new Error((await readError(resp)) || 'load subtitles failed');
+  return await resp.json();
+}
+
+export function apiSubtitleDownloadUrl(taskId, format) {
+  return `${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/subtitles/download?format=${encodeURIComponent(format)}`;
 }
 
 export function apiDownloadFileUrl(filePath) {

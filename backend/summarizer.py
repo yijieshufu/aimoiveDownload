@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import yt_dlp
 
@@ -32,6 +32,9 @@ AUDIO_DIR = os.path.join(TEMP_DIR, "summary_audio")
 os.makedirs(SUMMARY_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
+SUBTITLE_DIR = os.path.join(TEMP_DIR, "subtitles")
+os.makedirs(SUBTITLE_DIR, exist_ok=True)
+
 _TASKS: Dict[str, Dict] = {}
 _TASK_LOCK = threading.Lock()
 _WHISPER_MODEL_CACHE: Dict[str, WhisperModel] = {}
@@ -47,6 +50,31 @@ def _ts(seconds: float) -> str:
     if h > 0:
         return f"{h:02d}:{m:02d}:{sec:02d}"
     return f"{m:02d}:{sec:02d}"
+
+
+def _ts_srt(seconds: float) -> str:
+    ms = int(max(0, seconds) * 1000)
+    s = ms // 1000
+    ms = ms % 1000
+    m, sec = divmod(s, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
+
+def _ts_vtt(seconds: float) -> str:
+    ms = int(max(0, seconds) * 1000)
+    s = ms // 1000
+    ms = ms % 1000
+    m, sec = divmod(s, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d}.{ms:03d}"
+
+
+def _clamp_seconds(x: float, duration: float) -> float:
+    v = max(0.0, float(x or 0.0))
+    if duration and duration > 0:
+        v = min(v, float(duration))
+    return v
 
 
 def _provider_defaults(provider: str) -> tuple[str, str]:
@@ -155,6 +183,59 @@ def _call_chat_completion(cfg: LlmConfig, prompt: str) -> str:
         raise Exception(f"LLM 返回格式异常: {raw[:400]}")
 
 
+def _call_chat_completion_stream(cfg: LlmConfig, prompt: str) -> Iterator[str]:
+    url = f"{cfg.base_url}/chat/completions"
+    payload = {
+        "model": cfg.model,
+        "temperature": 0.2,
+        "stream": True,
+        "messages": [
+            {"role": "system", "content": "你是一个专业的视频内容分析助手。只输出 JSON，不要输出解释。"},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {cfg.api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            while True:
+                raw_line = resp.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                chunk = line[len("data:") :].strip()
+                if chunk == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(chunk)
+                    delta = (
+                        obj.get("choices", [{}])[0]
+                        .get("delta", {})
+                        .get("content")
+                    )
+                    if delta:
+                        yield str(delta)
+                except Exception:
+                    continue
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise Exception(f"LLM 流式调用失败: HTTP {e.code} - {detail[:400]}")
+    except Exception as e:
+        raise Exception(f"LLM 流式调用失败: {str(e)}")
+
+
 def _extract_json(text: str) -> Dict:
     text = (text or "").strip()
     if text.startswith("```"):
@@ -196,6 +277,256 @@ def _clean_subtitle_text(raw: str) -> str:
     text = re.sub(r"\n\d+\n", "\n", text)
     text = re.sub(r"\s+", " ", text).strip()
     return _to_simplified(text)
+
+
+def _parse_vtt_or_srt_to_segments(raw: str) -> List[Dict]:
+    s = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    s = re.sub(r"^\ufeff", "", s)
+    if s.lstrip().upper().startswith("WEBVTT"):
+        s = re.sub(r"^WEBVTT[^\n]*\n+", "", s, flags=re.IGNORECASE)
+    lines = s.split("\n")
+
+    segs: List[Dict] = []
+    i = 0
+
+    def parse_time(t: str) -> float:
+        t = (t or "").strip()
+        if "," in t:
+            t = t.replace(",", ".")
+        parts = t.split(":")
+        if len(parts) == 3:
+            h = float(parts[0])
+            m = float(parts[1])
+            sec = float(parts[2])
+            return h * 3600 + m * 60 + sec
+        if len(parts) == 2:
+            m = float(parts[0])
+            sec = float(parts[1])
+            return m * 60 + sec
+        return float(t)
+
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        if re.match(r"^\d+$", line):
+            i += 1
+            line = lines[i].strip() if i < len(lines) else ""
+        if "-->" not in line:
+            i += 1
+            continue
+        time_line = line
+        i += 1
+        text_lines = []
+        while i < len(lines) and lines[i].strip():
+            text_lines.append(lines[i].strip())
+            i += 1
+        try:
+            start_s, end_s = [x.strip() for x in time_line.split("-->", 1)]
+            start_s = start_s.split(" ")[0].strip()
+            end_s = end_s.split(" ")[0].strip()
+            start = parse_time(start_s)
+            end = parse_time(end_s)
+        except Exception:
+            continue
+        txt = re.sub(r"<[^>]+>", " ", " ".join(text_lines)).strip()
+        txt = re.sub(r"\s+", " ", txt).strip()
+        if txt:
+            segs.append({"start": start, "end": end, "text": _to_simplified(txt)})
+        i += 1
+    return segs
+
+
+def _bilibili_fetch_cc_segments(bvid: str) -> List[Dict]:
+    bvid = (bvid or "").strip()
+    if not bvid:
+        return []
+    view_url = "https://api.bilibili.com/x/web-interface/view?bvid=" + urllib.parse.quote(bvid, safe="")
+    req = urllib.request.Request(view_url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        view_raw = resp.read().decode("utf-8", errors="ignore")
+    view_obj = json.loads(view_raw or "{}")
+    data = (view_obj.get("data") or {})
+    cid = str(data.get("cid") or "").strip()
+    if not cid:
+        pages = data.get("pages") or []
+        if pages and isinstance(pages, list):
+            cid = str((pages[0] or {}).get("cid") or "").strip()
+    if not cid:
+        return []
+
+    player_url = (
+        "https://api.bilibili.com/x/player/v2?bvid="
+        + urllib.parse.quote(bvid, safe="")
+        + "&cid="
+        + urllib.parse.quote(cid, safe="")
+    )
+    req = urllib.request.Request(player_url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        player_raw = resp.read().decode("utf-8", errors="ignore")
+    player_obj = json.loads(player_raw or "{}")
+    subtitle = (((player_obj.get("data") or {}).get("subtitle") or {}))
+    sub_list = subtitle.get("subtitles") or []
+    if not sub_list:
+        return []
+
+    # Prefer human captions (AI=0), then zh, then first
+    def score(x: Dict) -> Tuple[int, int]:
+        ai = int((x.get("ai_status") or 0))
+        lang = str(x.get("lan") or "")
+        is_zh = 1 if lang.startswith("zh") else 0
+        return (1 if ai == 0 else 0, is_zh)
+
+    chosen = sorted([x for x in sub_list if isinstance(x, dict)], key=score, reverse=True)[0]
+    sub_url = str(chosen.get("subtitle_url") or "").strip()
+    if not sub_url:
+        return []
+    if sub_url.startswith("//"):
+        sub_url = "https:" + sub_url
+    req = urllib.request.Request(sub_url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        cc_raw = resp.read().decode("utf-8", errors="ignore")
+    cc_obj = json.loads(cc_raw or "{}")
+    body = cc_obj.get("body") or []
+    segs = []
+    for it in body:
+        if not isinstance(it, dict):
+            continue
+        start = float(it.get("from") or 0.0)
+        end = float(it.get("to") or start)
+        text = str(it.get("content") or "").strip()
+        if text:
+            segs.append({"start": start, "end": end, "text": _to_simplified(text)})
+    return segs
+
+
+def _extract_bvid(url: str) -> str:
+    m = re.search(r"/video/(BV[0-9A-Za-z]+)", url or "", flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(BV[0-9A-Za-z]{10,})\b", url or "", flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _extract_subtitle_segments(url: str) -> Tuple[List[Dict], str]:
+    # Returns (segments, source)
+    if "bilibili.com" in (url or ""):
+        bvid = _extract_bvid(url)
+        if bvid:
+            try:
+                segs = _bilibili_fetch_cc_segments(bvid)
+                if segs:
+                    return segs, "bilibili_cc"
+            except Exception:
+                pass
+
+    ydl_opts = {"skip_download": True, "quiet": True, "no_warnings": True, "noplaylist": True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    subtitle_url = _select_subtitle_url(info)
+    if subtitle_url:
+        req = urllib.request.Request(subtitle_url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw_sub = resp.read().decode("utf-8", errors="ignore")
+        segs = _parse_vtt_or_srt_to_segments(raw_sub)
+        if segs:
+            return segs, "platform_caption"
+        cleaned = _clean_subtitle_text(raw_sub)
+        if cleaned:
+            return [{"start": 0.0, "end": float(info.get("duration") or 0.0), "text": cleaned}], "platform_caption"
+    return [], "none"
+
+
+def _transcribe_segments_by_faster_whisper(audio_path: str) -> List[Dict]:
+    if WhisperModel is None:
+        raise Exception("faster-whisper 未安装，请执行: pip install faster-whisper")
+    model_size = os.getenv("WHISPER_MODEL_SIZE", "tiny")
+    device = os.getenv("WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
+    compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+
+    def _load_model(target_device: str, target_compute_type: str) -> WhisperModel:
+        cache_key = f"{model_size}:{target_device}:{target_compute_type}"
+        with _WHISPER_MODEL_LOCK:
+            model_local = _WHISPER_MODEL_CACHE.get(cache_key)
+            if model_local is None:
+                model_local = WhisperModel(model_size, device=target_device, compute_type=target_compute_type)
+                _WHISPER_MODEL_CACHE[cache_key] = model_local
+        return model_local
+
+    try:
+        model = _load_model(device, compute_type)
+    except Exception as e:
+        msg = str(e).lower()
+        if ("cublas" in msg or "cuda" in msg or "cudnn" in msg) and device != "cpu":
+            model = _load_model("cpu", "int8")
+        else:
+            raise
+
+    whisper_language = os.getenv("WHISPER_LANGUAGE", "auto").strip().lower()
+    transcribe_language = None if whisper_language in ("", "auto", "none") else whisper_language
+    segments, _ = model.transcribe(
+        audio_path,
+        vad_filter=False,
+        beam_size=1,
+        best_of=1,
+        temperature=0.0,
+        language=transcribe_language,
+    )
+    out = []
+    for seg in segments:
+        t = (seg.text or "").strip()
+        if not t:
+            continue
+        out.append({"start": float(seg.start or 0.0), "end": float(seg.end or seg.start or 0.0), "text": _to_simplified(t)})
+    return out
+
+
+def _segments_to_srt(segments: List[Dict], duration: float = 0.0) -> str:
+    lines = []
+    idx = 1
+    for seg in segments or []:
+        start = _clamp_seconds(seg.get("start", 0.0), duration)
+        end = _clamp_seconds(seg.get("end", start), duration)
+        if end < start:
+            end = start
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        lines.append(str(idx))
+        lines.append(f"{_ts_srt(start)} --> {_ts_srt(end)}")
+        lines.append(text)
+        lines.append("")
+        idx += 1
+    return "\n".join(lines).strip() + "\n"
+
+
+def _segments_to_vtt(segments: List[Dict], duration: float = 0.0) -> str:
+    lines = ["WEBVTT", ""]
+    for seg in segments or []:
+        start = _clamp_seconds(seg.get("start", 0.0), duration)
+        end = _clamp_seconds(seg.get("end", start), duration)
+        if end < start:
+            end = start
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        lines.append(f"{_ts_vtt(start)} --> {_ts_vtt(end)}")
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _segments_to_txt(segments: List[Dict]) -> str:
+    lines = []
+    for seg in segments or []:
+        start = float(seg.get("start") or 0.0)
+        text = str(seg.get("text") or "").strip()
+        if text:
+            lines.append(f"[{_ts(start)}] {text}")
+    return "\n".join(lines).strip() + "\n"
 
 
 def _to_simplified(text: str) -> str:
@@ -350,6 +681,46 @@ def _extract_text(url: str) -> tuple[str, Dict, str]:
             pass
 
 
+def get_task_subtitle_segments(task_id: str) -> Dict:
+    task = get_summary_task(task_id)
+    result = task.get("result") or {}
+    if not result:
+        raise Exception("任务未完成，暂无字幕")
+    segments = result.get("subtitle_segments") or []
+    return {
+        "task_id": task_id,
+        "source": result.get("subtitle_source") or result.get("transcript_source") or "unknown",
+        "segments": segments,
+    }
+
+
+def build_task_subtitle_file(task_id: str, fmt: str) -> str:
+    fmt = (fmt or "srt").lower().strip()
+    if fmt not in {"srt", "vtt", "txt"}:
+        raise Exception("format 仅支持 srt/vtt/txt")
+    task = get_summary_task(task_id)
+    if task.get("status") != "completed":
+        raise Exception("任务未完成，暂不能导出字幕")
+    result = task.get("result") or {}
+    segments = result.get("subtitle_segments") or []
+    duration = float(result.get("duration") or 0.0)
+    if not segments:
+        # Fallback to transcript as single block
+        t = str(result.get("transcript_text") or "").strip()
+        if t:
+            segments = [{"start": 0.0, "end": duration, "text": t}]
+    if fmt == "srt":
+        content = _segments_to_srt(segments, duration)
+    elif fmt == "vtt":
+        content = _segments_to_vtt(segments, duration)
+    else:
+        content = _segments_to_txt(segments)
+    out_path = os.path.join(SUBTITLE_DIR, f"subtitle_{task_id}.{fmt}")
+    with open(out_path, "w", encoding="utf-8") as fp:
+        fp.write(content)
+    return out_path
+
+
 def _build_prompt(title: str, duration: float, content: str) -> str:
     sample = content[:48000]
     return f"""
@@ -429,8 +800,16 @@ def _normalize_result(parsed: Dict, duration: float) -> Dict:
         text = str(item).strip()
         if text:
             summary.append(text)
-    if len(summary) > 12:
-        summary = summary[:12]
+    # balanced mode: dedupe and keep concise top lines
+    dedup_summary = []
+    seen_summary = set()
+    for s in summary:
+        k = re.sub(r"\s+", "", s).lower()
+        if not k or k in seen_summary:
+            continue
+        seen_summary.add(k)
+        dedup_summary.append(s)
+    summary = dedup_summary[:10]
 
     chapters = []
     for ch in parsed.get("chapters") or []:
@@ -589,11 +968,22 @@ def _normalize_result(parsed: Dict, duration: float) -> Dict:
 
     mindmap = {"title": _short_name(mindmap_title, 12), "children": mindmap_children}
 
+    if not summary:
+        summary = [str(ch.get("title") or "").strip() for ch in chapters[:4] if str(ch.get("title") or "").strip()]
+
+    summary_sections = {
+        "overview": summary[:2],
+        "outline": [str(ch.get("title") or "").strip() for ch in chapters[:6] if str(ch.get("title") or "").strip()],
+        "key_points": summary[2:8] if len(summary) > 2 else summary[:6],
+        "one_liner": (summary[0] if summary else ""),
+    }
+
     return {
         "summary": summary,
         "chapters": chapters,
         "highlights": highlights[:30],
         "mindmap": mindmap,
+        "summary_sections": summary_sections,
     }
 
 
@@ -620,6 +1010,55 @@ def _build_qa_prompt(question: str, result: Dict) -> str:
 """.strip()
 
 
+def _build_chat_prompt(messages: List[Dict], result: Dict) -> str:
+    transcript = (result.get("transcript_text") or "")[:20000]
+    summary_text = "\n".join(f"- {x}" for x in (result.get("summary") or [])[:8])
+    output_language = (result.get("output_language") or "zh").lower()
+    lang = "中文" if output_language == "zh" else "English"
+    conv = []
+    for m in messages[-20:]:
+        role = (m.get("role") or "user").lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        conv.append(f"{role.upper()}: {content}")
+    conv_text = "\n".join(conv)
+    return f"""
+你是视频内容问答助手。请仅根据给定的摘要与转录回答问题，必要时明确说明证据不足。
+输出语言：{lang}
+回答要求：简洁、结构化（最多 6 条）。
+
+视频标题：
+{result.get("title") or "N/A"}
+
+摘要：
+{summary_text}
+
+转录（节选）：
+{transcript}
+
+对话历史：
+{conv_text}
+
+请继续对话，输出 assistant 的回复纯文本：
+""".strip()
+
+
+def chat_with_summary(task_id: str, messages: List[Dict]) -> Dict:
+    task = get_summary_task(task_id)
+    if task.get("status") != "completed":
+        raise Exception("总结任务未完成，暂不能对话")
+    result = task.get("result") or {}
+    cfg = _load_llm_config()
+    prompt = _build_chat_prompt(messages or [], result)
+    answer = _call_chat_completion(cfg, prompt).strip()
+    if not answer:
+        answer = "根据现有转录无法确认。"
+    return {"task_id": task_id, "answer": answer, "provider": cfg.provider, "model": cfg.model}
+
+
 def _run_task(task_id: str, url: str) -> None:
     with _TASK_LOCK:
         _TASKS[task_id]["status"] = "running"
@@ -632,6 +1071,26 @@ def _run_task(task_id: str, url: str) -> None:
             _TASKS[task_id]["stage"] = "extracting_transcript"
         transcript, info, transcript_source = _extract_text(normalized)
         output_language = _detect_output_language(transcript)
+        subtitle_segments: List[Dict] = []
+        subtitle_source = "none"
+        try:
+            subtitle_segments, subtitle_source = _extract_subtitle_segments(normalized)
+        except Exception:
+            subtitle_segments, subtitle_source = [], "none"
+        if not subtitle_segments:
+            # If no platform subtitles, generate timestamped segments from ASR
+            try:
+                audio_path = _download_audio_for_asr(normalized)
+                try:
+                    subtitle_segments = _transcribe_segments_by_faster_whisper(audio_path)
+                    subtitle_source = "asr"
+                finally:
+                    try:
+                        os.remove(audio_path)
+                    except Exception:
+                        pass
+            except Exception:
+                subtitle_segments = []
         with _TASK_LOCK:
             _TASKS[task_id]["stage"] = "calling_llm"
         cfg = _load_llm_config()
@@ -649,8 +1108,11 @@ def _run_task(task_id: str, url: str) -> None:
             "chapters": normalized_result["chapters"],
             "highlights": normalized_result["highlights"],
             "mindmap": normalized_result["mindmap"],
+            "summary_sections": normalized_result.get("summary_sections") or {},
             "transcript_source": transcript_source,
             "transcript_text": transcript,
+            "subtitle_source": subtitle_source if subtitle_source != "none" else transcript_source,
+            "subtitle_segments": subtitle_segments,
             "provider": cfg.provider,
             "model": cfg.model,
             "output_language": output_language,
@@ -675,10 +1137,15 @@ def _run_task(task_id: str, url: str) -> None:
 
 
 def create_summary_task(url: str) -> str:
+    return create_summary_task_with_options(url, start_thread=True)
+
+
+def create_summary_task_with_options(url: str, start_thread: bool = True) -> str:
     task_id = uuid.uuid4().hex
     with _TASK_LOCK:
         _TASKS[task_id] = {
             "task_id": task_id,
+            "url": url,
             "status": "pending",
             "stage": "pending",
             "error": None,
@@ -686,9 +1153,133 @@ def create_summary_task(url: str) -> str:
             "created_at": int(time.time()),
             "updated_at": int(time.time()),
         }
-    t = threading.Thread(target=_run_task, args=(task_id, url), daemon=True)
-    t.start()
+    if start_thread:
+        t = threading.Thread(target=_run_task, args=(task_id, url), daemon=True)
+        t.start()
     return task_id
+
+
+def stream_summary_task(task_id: str) -> Iterator[Dict]:
+    task = get_summary_task(task_id)
+    url = str(task.get("url") or "").strip()
+    if not url:
+        raise Exception("任务缺少 url，无法流式执行")
+
+    def emit(event: str, data: Dict) -> Dict:
+        return {"event": event, "data": data}
+
+    with _TASK_LOCK:
+        if _TASKS[task_id]["status"] not in ("pending",):
+            # If already running/completed, just stream current snapshot and exit
+            snap = dict(_TASKS[task_id])
+            yield emit("stage", {"stage": snap.get("stage"), "status": snap.get("status")})
+            if snap.get("status") == "completed":
+                yield emit("done", {"result": snap.get("result")})
+            if snap.get("status") == "failed":
+                yield emit("error", {"error": snap.get("error")})
+            return
+        _TASKS[task_id]["status"] = "running"
+        _TASKS[task_id]["stage"] = "normalizing_url"
+        _TASKS[task_id]["updated_at"] = int(time.time())
+
+    yield emit("stage", {"stage": "normalizing_url"})
+    try:
+        normalized = normalize_input_to_url(url)
+        if not normalized:
+            raise Exception("请输入有效的视频URL")
+
+        with _TASK_LOCK:
+            _TASKS[task_id]["stage"] = "extracting_transcript"
+            _TASKS[task_id]["updated_at"] = int(time.time())
+        yield emit("stage", {"stage": "extracting_transcript"})
+        transcript, info, transcript_source = _extract_text(normalized)
+        output_language = _detect_output_language(transcript)
+
+        subtitle_segments: List[Dict] = []
+        subtitle_source = "none"
+        try:
+            subtitle_segments, subtitle_source = _extract_subtitle_segments(normalized)
+        except Exception:
+            subtitle_segments, subtitle_source = [], "none"
+        if not subtitle_segments:
+            try:
+                audio_path = _download_audio_for_asr(normalized)
+                try:
+                    subtitle_segments = _transcribe_segments_by_faster_whisper(audio_path)
+                    subtitle_source = "asr"
+                finally:
+                    try:
+                        os.remove(audio_path)
+                    except Exception:
+                        pass
+            except Exception:
+                subtitle_segments = []
+
+        with _TASK_LOCK:
+            _TASKS[task_id]["stage"] = "calling_llm"
+            _TASKS[task_id]["updated_at"] = int(time.time())
+        yield emit("stage", {"stage": "calling_llm"})
+
+        cfg = _load_llm_config()
+        prompt = _build_prompt(info.get("title", "N/A"), info.get("duration", 0), transcript)
+
+        buf = []
+        # Try streaming first; if fails, fallback to non-stream
+        try:
+            for delta in _call_chat_completion_stream(cfg, prompt):
+                buf.append(delta)
+                yield emit("delta", {"text": delta})
+        except Exception:
+            content = _call_chat_completion(cfg, prompt)
+            buf = [content]
+            yield emit("delta", {"text": content})
+        content_full = "".join(buf)
+
+        parsed = _extract_json(content_full)
+        normalized_result = _normalize_result(parsed, info.get("duration", 0))
+
+        with _TASK_LOCK:
+            _TASKS[task_id]["stage"] = "rendering_markdown"
+            _TASKS[task_id]["updated_at"] = int(time.time())
+        yield emit("stage", {"stage": "rendering_markdown"})
+
+        result = {
+            "title": info.get("title", "N/A"),
+            "url": normalized,
+            "duration": info.get("duration", 0) or 0,
+            "summary": normalized_result["summary"],
+            "chapters": normalized_result["chapters"],
+            "highlights": normalized_result["highlights"],
+            "mindmap": normalized_result["mindmap"],
+            "summary_sections": normalized_result.get("summary_sections") or {},
+            "transcript_source": transcript_source,
+            "transcript_text": transcript,
+            "subtitle_source": subtitle_source if subtitle_source != "none" else transcript_source,
+            "subtitle_segments": subtitle_segments,
+            "provider": cfg.provider,
+            "model": cfg.model,
+            "output_language": output_language,
+        }
+        markdown = _render_markdown(result)
+        md_path = os.path.join(SUMMARY_DIR, f"summary_{task_id}.md")
+        with open(md_path, "w", encoding="utf-8") as fp:
+            fp.write(markdown)
+        result["markdown_file_path"] = md_path
+
+        with _TASK_LOCK:
+            _TASKS[task_id]["status"] = "completed"
+            _TASKS[task_id]["stage"] = "completed"
+            _TASKS[task_id]["result"] = result
+            _TASKS[task_id]["updated_at"] = int(time.time())
+
+        yield emit("done", {"result": result})
+    except Exception as e:
+        with _TASK_LOCK:
+            _TASKS[task_id]["status"] = "failed"
+            _TASKS[task_id]["stage"] = "failed"
+            _TASKS[task_id]["error"] = str(e)
+            _TASKS[task_id]["updated_at"] = int(time.time())
+        yield emit("error", {"error": str(e)})
 
 
 def get_summary_task(task_id: str) -> Dict:

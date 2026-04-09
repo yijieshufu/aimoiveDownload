@@ -54,6 +54,52 @@ body {
   margin: 0;
 }
 
+/* Mindmap (jsMind) - align with XMind-like reference style */
+.mindmap-surface .jsmind-inner {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.mindmap-surface jmnode {
+  border-radius: 14px !important;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  padding: 10px 14px !important;
+  font: 14px/1.2 system-ui, 'Segoe UI', Roboto, sans-serif !important;
+}
+
+.mindmap-surface jmnode.root {
+  border-radius: 18px !important;
+  padding: 12px 18px !important;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16) !important;
+}
+
+.mindmap-surface jmnode.selected {
+  outline: 3px solid rgba(59, 130, 246, 0.35) !important;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18) !important;
+}
+
+.mindmap-surface jmexpander {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(15, 23, 42, 0.25);
+}
+
+.mindmap-surface .jmnode-overflow-hidden jmnode {
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mindmap-fullscreen {
+  position: fixed !important;
+  inset: 16px !important;
+  height: auto !important;
+  width: auto !important;
+  z-index: 60 !important;
+  border-radius: 16px !important;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22) !important;
+}
+
 h1,
 h2 {
   font-family: var(--heading);

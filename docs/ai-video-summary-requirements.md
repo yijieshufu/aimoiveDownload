@@ -1,4 +1,4 @@
-# AI 视频总结需求分析文档（最终确认版 v2）
+# AI 视频总结需求分析文档（最终确认版 v3）
 
 ## 一、已确认项（来自你的最终确认）
 
@@ -30,6 +30,18 @@
 - `POST /api/summarize` 创建任务
 - `GET /api/summarize/{task_id}` 轮询进度与结果
 - 展示阶段进度条（如：URL 处理/转录/LLM/Markdown）
+- 用户在**视频解析结果页**点击「**AI 总结**」按钮，触发 AI 分析（与当前解析 URL 绑定）
+
+### 2.5) AI 能力（DeepSeek + SSE 流式输出）
+
+- AI 能力：接入 **DeepSeek** 大模型（兼容 OpenAI Chat Completions 协议）
+- 输出形态：支持 **SSE 流式输出**，实时展示生成过程
+- SSE 事件类型（建议）：
+  - `stage`: 阶段变更（extracting_transcript / calling_llm / rendering_markdown 等）
+  - `delta`: 文本增量（用于前端实时渲染）
+  - `progress`: 进度（0-100）
+  - `done`: 最终结构化结果（JSON）
+  - `error`: 错误信息（可读）
 
 ### 3) 总结展示结构
 
@@ -44,9 +56,11 @@
 
 总结内容要求：
 
+- AI 自动生成：**视频概述、内容大纲、核心知识要点、一句话总结**
 - 结构化输出、去重、去噪、时间戳纠正
 - 重要度排序
 - 支持 Markdown 下载
+- 使用 `@tailwindcss/typography` 对 Summary 区域进行精美排版（prose）
 
 ### 4) 语言策略
 
@@ -73,6 +87,19 @@
 - `POST /api/summarize/{task_id}/qa`
 - 仅使用当前任务（当前视频）的总结与转录作为上下文
 - 不做跨任务检索
+- 支持多轮对话（同一 `task_id` 保存对话历史）
+
+### 6.5) 字幕/转录（时间戳列表 + 下载）
+
+- 字幕文本：展示带时间戳的完整字幕列表
+- 支持展开/收起（默认折叠为“按段落/按时间块”）
+- 支持下载字幕文件三种格式：SRT / VTT / TXT
+
+字幕获取策略（必须）：
+
+- 优先提取平台自带字幕（人工字幕 > 自动字幕）
+- B 站：通过专用 API 获取 CC 字幕（优先人工）
+- 无平台字幕时：回退 ASR（faster-whisper）
 
 ## 四、数据持久化设计
 
@@ -102,6 +129,10 @@
 - `PUT /api/ui/tabs`
 - `GET /api/summarize/{task_id}/mindmap`
 - `PUT /api/summarize/{task_id}/mindmap`
+- `GET /api/summarize/{task_id}/subtitles`（返回字幕片段列表，带时间戳）
+- `GET /api/summarize/{task_id}/subtitles/download?format=srt|vtt|txt`
+- `GET /api/summarize/{task_id}/stream`（SSE：流式输出总结过程）
+- `POST /api/summarize/{task_id}/chat`（多轮对话：提交 message，返回 assistant 回复）
 
 ## 五点五、思维导图视觉与结构规范（按参考图新增）
 
@@ -141,9 +172,15 @@
 
 - 支持：新增子节点、新增同级、重命名、删除、拖拽
 - 支持：展开/折叠分支、居中到选中节点、缩放
+- 支持：全屏展示
 - 自动保存：编辑后 600ms 防抖提交
 - 保存状态可见：Saving / Saved / Failed
 - 刷新后恢复最近编辑版本（不是初始模型版本）
+
+导出能力（必须）：
+
+- 支持下载 **SVG 矢量图**
+- 支持下载 **高清 PNG（4K+）**
 
 ### 6) 验收标准（导图专项）
 

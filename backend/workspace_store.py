@@ -13,12 +13,11 @@ _LOCK = threading.Lock()
 _REQUIRED_TAB_IDS = {"summary", "mindmap"}
 
 DEFAULT_TABS = [
-    {"id": "summary", "name": "Summary", "type": "system", "order_index": 0, "visible": 1},
-    {"id": "chapters", "name": "Chapters", "type": "system", "order_index": 1, "visible": 1},
-    {"id": "highlights", "name": "Timeline", "type": "system", "order_index": 2, "visible": 1},
-    {"id": "transcript", "name": "Transcript", "type": "system", "order_index": 3, "visible": 1},
-    {"id": "mindmap", "name": "Mindmap", "type": "system", "order_index": 4, "visible": 1},
-    {"id": "qa", "name": "Q&A", "type": "system", "order_index": 5, "visible": 1},
+    {"id": "summary", "name": "摘要", "type": "system", "order_index": 0, "visible": 1},
+    {"id": "highlights", "name": "时间轴", "type": "system", "order_index": 1, "visible": 1},
+    {"id": "transcript", "name": "字幕稿", "type": "system", "order_index": 2, "visible": 1},
+    {"id": "mindmap", "name": "思维导图", "type": "system", "order_index": 3, "visible": 1},
+    {"id": "qa", "name": "问答", "type": "system", "order_index": 4, "visible": 1},
 ]
 
 
@@ -52,6 +51,28 @@ def init_workspace_store() -> None:
                 )
                 """
             )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS summary_chat (
+                    task_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (task_id, seq)
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS summary_edit (
+                    task_id TEXT PRIMARY KEY,
+                    sections_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            c.execute("DELETE FROM ui_tabs WHERE id = ?", ("chapters",))
             count = c.execute("SELECT COUNT(*) AS n FROM ui_tabs").fetchone()["n"]
             if count == 0:
                 now = int(time.time())
@@ -145,6 +166,78 @@ def get_mindmap(task_id: str) -> Dict:
     }
 
 
+def _sanitize_summary_sections(raw: Dict) -> Dict:
+    def clip_str(s: str, max_len: int) -> str:
+        t = str(s or "").strip()
+        return t[:max_len]
+
+    def clip_list(arr, max_items: int, max_item_len: int) -> List[str]:
+        out = []
+        if not isinstance(arr, list):
+            return out
+        for x in arr[:max_items]:
+            t = clip_str(x, max_item_len)
+            if t:
+                out.append(t)
+        return out
+
+    d = raw if isinstance(raw, dict) else {}
+    return {
+        "overview": clip_list(d.get("overview") or [], 24, 2000),
+        "outline": clip_list(d.get("outline") or [], 40, 500),
+        "key_points": clip_list(d.get("key_points") or [], 40, 2000),
+        "one_liner": clip_str(d.get("one_liner") or "", 2000),
+    }
+
+
+def get_summary_edit(task_id: str) -> Optional[Dict]:
+    init_workspace_store()
+    with _LOCK:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT sections_json,updated_at FROM summary_edit WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+    if not row:
+        return None
+    try:
+        data = json.loads(row["sections_json"])
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {"sections": _sanitize_summary_sections(data), "updated_at": row["updated_at"]}
+
+
+def save_summary_edit(task_id: str, sections: Dict) -> Dict:
+    init_workspace_store()
+    now = int(time.time())
+    cleaned = _sanitize_summary_sections(sections or {})
+    body = json.dumps(cleaned, ensure_ascii=False)
+    with _LOCK:
+        with _conn() as c:
+            c.execute(
+                """
+                INSERT INTO summary_edit (task_id,sections_json,updated_at)
+                VALUES (?,?,?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                  sections_json=excluded.sections_json,
+                  updated_at=excluded.updated_at
+                """,
+                (task_id, body, now),
+            )
+            c.commit()
+    return {"task_id": task_id, "sections": cleaned, "updated_at": now}
+
+
+def delete_summary_edit(task_id: str) -> None:
+    init_workspace_store()
+    with _LOCK:
+        with _conn() as c:
+            c.execute("DELETE FROM summary_edit WHERE task_id=?", (task_id,))
+            c.commit()
+
+
 def save_mindmap(task_id: str, mindmap: Dict) -> Dict:
     init_workspace_store()
     now = int(time.time())
@@ -164,6 +257,45 @@ def save_mindmap(task_id: str, mindmap: Dict) -> Dict:
             )
             c.commit()
     return {"task_id": task_id, "mindmap": mm, "updated_at": now}
+
+
+def append_chat_message(task_id: str, role: str, content: str) -> Dict:
+    init_workspace_store()
+    role = (role or "").strip().lower()
+    if role not in {"user", "assistant", "system"}:
+        role = "user"
+    text = str(content or "").strip()
+    if not text:
+        raise Exception("content is empty")
+    now = int(time.time())
+    with _LOCK:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS m FROM summary_chat WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            seq = int(row["m"] or 0) + 1
+            c.execute(
+                "INSERT INTO summary_chat (task_id,seq,role,content,created_at) VALUES (?,?,?,?,?)",
+                (task_id, seq, role, text, now),
+            )
+            c.commit()
+    return {"task_id": task_id, "seq": seq, "role": role, "content": text, "created_at": now}
+
+
+def get_chat_messages(task_id: str, limit: int = 30) -> List[Dict]:
+    init_workspace_store()
+    lim = max(1, min(200, int(limit or 30)))
+    with _LOCK:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT seq,role,content,created_at FROM summary_chat WHERE task_id=? ORDER BY seq ASC LIMIT ?",
+                (task_id, lim),
+            ).fetchall()
+    return [
+        {"seq": r["seq"], "role": r["role"], "content": r["content"], "created_at": r["created_at"]}
+        for r in rows
+    ]
 
 
 def _sanitize_mindmap(mindmap: Dict) -> Dict:
