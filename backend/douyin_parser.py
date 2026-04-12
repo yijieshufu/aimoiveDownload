@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -11,6 +13,13 @@ cookie_file_path = os.path.join(temp_dir, "cookies.txt")
 
 _cookie_jar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookie_jar))
+
+# 与分享页抓取一致；部分 CDN 对直链校验 UA/Referer
+_DOUYIN_MOBILE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+    "Mobile/15E148 Safari/604.1"
+)
 
 
 def is_douyin_url(url: str) -> bool:
@@ -80,12 +89,16 @@ def _resolve_redirect_url(url: str) -> str:
 
 def _extract_douyin_video_id(url: str) -> str:
     resolved = _resolve_redirect_url(url)
-    m = re.search(r"/video/(\d+)", resolved)
-    if m:
-        return m.group(1)
-    m2 = re.search(r"modal_id=(\d+)", resolved)
-    if m2:
-        return m2.group(1)
+    patterns = (
+        r"/video/(\d+)",
+        r"/share/video/(\d+)",
+        r"modal_id=(\d+)",
+        r"aweme_id=(\d+)",
+    )
+    for pat in patterns:
+        m = re.search(pat, resolved, flags=re.IGNORECASE)
+        if m:
+            return m.group(1)
     raise Exception("无法从抖音链接中提取 video_id")
 
 
@@ -109,29 +122,41 @@ def _decode_json_escaped_text(value: str) -> str:
         return value
 
 
+def _find_playwm_url_in_share_html(html: str) -> str:
+    """分享页 HTML 中 playwm 片段形态多变，按序尝试多种正则。"""
+    candidates = (
+        # 常见：JSON 里转义斜杠
+        r'"url_list":\["(https:\\u002F\\u002F[^"]*playwm[^"]*)"\]',
+        r'"url_list":\["(https:\\/\\/[^"]*playwm[^"]*)"\]',
+        # 未转义 https
+        r'"url_list":\["(https://[^"]*playwm[^"]*)"\]',
+        # 单引号或 url_list 多元素时取含 playwm 的一段
+        r'"url_list":\[\s*"(https:[^"]*playwm[^"]*)"\s*\]',
+        r'"(https:[^"]+playwm[^"]*)"',
+    )
+    for pat in candidates:
+        m = re.search(pat, html, flags=re.IGNORECASE)
+        if m:
+            raw = m.group(1)
+            if "playwm" in raw.lower():
+                return _decode_js_escaped_url(raw)
+    return ""
+
+
 def _extract_item_from_share_page(video_id: str) -> Dict:
     """
     公开分享页兜底解析（无登录态）：
     从 iesdouyin 分享页 HTML 中提取 playwm / 标题 / 作者等字段。
     """
     share_url = f"https://www.iesdouyin.com/share/video/{video_id}/"
-    mobile_ua = (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
-        "Mobile/15E148 Safari/604.1"
-    )
     html = _http_get_text(
         share_url,
-        headers=_default_headers("https://www.iesdouyin.com/") | {"User-Agent": mobile_ua},
+        headers={**_default_headers("https://www.iesdouyin.com/"), "User-Agent": _DOUYIN_MOBILE_UA},
     )
 
-    m_playwm = re.search(
-        r'"url_list":\["(https:\\u002F\\u002F[^"]*playwm[^"]*)"\]',
-        html,
-    )
-    if not m_playwm:
+    playwm_url = _find_playwm_url_in_share_html(html)
+    if not playwm_url:
         raise Exception("公开分享页中未找到 playwm 地址")
-    playwm_url = _decode_js_escaped_url(m_playwm.group(1))
 
     m_cover = re.search(
         r'"cover":\{.*?"url_list":\["(https:\\u002F\\u002F[^"]+)"\]',
@@ -166,13 +191,18 @@ def _extract_item_from_share_page(video_id: str) -> Dict:
 def get_douyin_item_info(url: str) -> Dict:
     video_id = _extract_douyin_video_id(url)
     api = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={video_id}"
-    try:
-        data = _http_get_json(api, headers=_default_headers("https://www.douyin.com/"))
-        items = data.get("item_list") or []
-        if items:
-            return items[0]
-    except Exception:
-        pass
+    header_variants = (
+        _default_headers("https://www.douyin.com/"),
+        {**_default_headers("https://www.iesdouyin.com/"), "User-Agent": _DOUYIN_MOBILE_UA},
+    )
+    for hdrs in header_variants:
+        try:
+            data = _http_get_json(api, headers=hdrs)
+            items = data.get("item_list") or []
+            if items:
+                return items[0]
+        except Exception:
+            continue
     # 公开 API 空返回时，回退公开分享页抓取（仍不需要登录态）
     return _extract_item_from_share_page(video_id)
 
@@ -194,12 +224,17 @@ def build_douyin_nowm_url(item: Dict) -> str:
     return candidate.replace("playwm", "play")
 
 
+def _douyin_media_request_headers() -> Dict[str, str]:
+    """拉取无水印直链时与 H5 一致，降低 403 / 空响应概率。"""
+    return {**_default_headers("https://www.douyin.com/"), "User-Agent": _DOUYIN_MOBILE_UA}
+
+
 def _probe_content_length(url: str) -> int:
     """
     尝试探测直链文件大小（字节）。
     优先 HEAD；若不返回长度，则使用 Range: bytes=0-0 回退。
     """
-    headers = _default_headers("https://www.douyin.com/")
+    headers = _douyin_media_request_headers()
     try:
         req = urllib.request.Request(url, headers=headers, method="HEAD")
         with _opener.open(req, timeout=15) as resp:
@@ -282,6 +317,8 @@ def extract_douyin_info(normalized_url: str) -> Dict:
                 "height": height,
                 "width": width,
                 "filesize": filesize,
+                "display_size_bytes": int(filesize) if filesize else 0,
+                "display_size_kind": "exact" if filesize else "unknown",
                 "fps": 0,
                 "vcodec": "h264",
                 "acodec": "aac",
@@ -314,7 +351,7 @@ def download_douyin_video(normalized_url: str, temp_dir: str) -> Dict:
     file_path = os.path.join(temp_dir, f"video_{os.urandom(8).hex()}.mp4")
     req = urllib.request.Request(
         direct_url,
-        headers=_default_headers("https://www.douyin.com/"),
+        headers=_douyin_media_request_headers(),
         method="GET",
     )
     with _opener.open(req, timeout=60) as resp, open(file_path, "wb") as fp:

@@ -4,3 +4,9 @@ yt-dlp
 python-multipart
 faster-whisper
 opencc-python-reimplemented
+authlib
+httpx
+itsdangerous
+cryptography
+pytest
+httpx

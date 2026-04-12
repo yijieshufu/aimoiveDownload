@@ -8,7 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist 由 CI/本地 build 生成；本仓库提交构建产物供后端 /frontend 静态托管
+# dist-ssr
 dist-ssr
 *.local
 

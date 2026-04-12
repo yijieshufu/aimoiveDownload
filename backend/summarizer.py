@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -8,17 +10,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import yt_dlp
 
 from .downloader import normalize_input_to_url
 from .douyin_parser import is_douyin_url, get_douyin_item_info, build_douyin_nowm_url, _default_headers, _opener
+from .env_bootstrap import load_dotenv_files
 
+_FASTER_WHISPER_IMPORT_ERROR: Optional[BaseException] = None
 try:
     from faster_whisper import WhisperModel
-except Exception:
+except Exception as _e:
     WhisperModel = None
+    _FASTER_WHISPER_IMPORT_ERROR = _e
 
 try:
     from opencc import OpenCC
@@ -37,10 +42,20 @@ os.makedirs(SUBTITLE_DIR, exist_ok=True)
 
 _TASKS: Dict[str, Dict] = {}
 _TASK_LOCK = threading.Lock()
-_WHISPER_MODEL_CACHE: Dict[str, WhisperModel] = {}
+_WHISPER_MODEL_CACHE: Dict[str, Any] = {}
 _WHISPER_MODEL_LOCK = threading.Lock()
-_ENV_LOADED = False
 _OPENCC_T2S = OpenCC("t2s") if OpenCC is not None else None
+
+
+def _raise_if_faster_whisper_unavailable() -> None:
+    if WhisperModel is not None:
+        return
+    err = _FASTER_WHISPER_IMPORT_ERROR
+    if isinstance(err, ModuleNotFoundError):
+        raise Exception("faster-whisper 未安装，请执行: pip install faster-whisper")
+    if err is not None:
+        raise Exception(f"faster-whisper 加载失败: {err!r}")
+    raise Exception("faster-whisper 未安装，请执行: pip install faster-whisper")
 
 
 def _ts(seconds: float) -> str:
@@ -87,28 +102,7 @@ def _provider_defaults(provider: str) -> tuple[str, str]:
 
 
 def _load_local_env_once() -> None:
-    global _ENV_LOADED
-    if _ENV_LOADED:
-        return
-    _ENV_LOADED = True
-
-    env_path = os.path.join(os.getcwd(), ".env")
-    if not os.path.exists(env_path):
-        return
-    try:
-        with open(env_path, "r", encoding="utf-8") as fp:
-            for raw_line in fp:
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip("'").strip('"')
-                if key and key not in os.environ:
-                    os.environ[key] = value
-    except Exception:
-        # .env 读取失败时不阻断主流程，仍按系统环境变量继续。
-        pass
+    load_dotenv_files()
 
 
 def _resolve_api_key(provider: str) -> str:
@@ -441,8 +435,7 @@ def _extract_subtitle_segments(url: str) -> Tuple[List[Dict], str]:
 
 
 def _transcribe_segments_by_faster_whisper(audio_path: str) -> List[Dict]:
-    if WhisperModel is None:
-        raise Exception("faster-whisper 未安装，请执行: pip install faster-whisper")
+    _raise_if_faster_whisper_unavailable()
     model_size = os.getenv("WHISPER_MODEL_SIZE", "tiny")
     device = os.getenv("WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
     compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
@@ -571,8 +564,7 @@ def _download_audio_for_asr(url: str) -> str:
 
 
 def _transcribe_by_faster_whisper(audio_path: str) -> str:
-    if WhisperModel is None:
-        raise Exception("faster-whisper 未安装，请执行: pip install faster-whisper")
+    _raise_if_faster_whisper_unavailable()
     model_size = os.getenv("WHISPER_MODEL_SIZE", "tiny")
     device = os.getenv("WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
     compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")

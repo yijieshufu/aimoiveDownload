@@ -125,10 +125,10 @@ function buildGraph(tree, opts = {}) {
         position: { x, y: cy },
         data: { label: child.name, mmBranchColor: color },
         style: {
-          '--mm-bg': '#f8fafc',
-          '--mm-border': `${color}66`,
+          '--mm-bg': 'rgba(255,255,255,0.06)',
+          '--mm-border': `${color}55`,
           background: 'var(--mm-bg)',
-          color: '#0f172a',
+          color: '#e5e7eb',
           borderRadius: '10px',
           padding: '6px 10px',
           border: '1px solid var(--mm-border)',
@@ -161,10 +161,10 @@ function buildGraph(tree, opts = {}) {
         position: { x: sign * colW, y: yCenter },
         data: { label: item.node.name, mmBranchColor: item.color },
         style: {
-          '--mm-bg': item.color,
-          '--mm-border': item.color,
+          '--mm-bg': 'rgba(255,255,255,0.08)',
+          '--mm-border': `${item.color}aa`,
           background: 'var(--mm-bg)',
-          color: '#fff',
+          color: '#f8fafc',
           borderRadius: '12px',
           padding: '6px 10px',
           border: '1px solid var(--mm-border)',
@@ -189,8 +189,8 @@ function buildGraph(tree, opts = {}) {
     position: { x: 0, y: 0 },
     data: { label: tree.title, mmRoot: true },
     style: {
-      '--mm-bg': '#0f172a',
-      '--mm-border': '#0f172a',
+      '--mm-bg': '#020617',
+      '--mm-border': 'rgba(255,255,255,0.16)',
       background: 'var(--mm-bg)',
       color: '#fff',
       borderRadius: '14px',
@@ -467,7 +467,7 @@ async function exportPng4k() {
   try {
     const rect = flowWrap.value.getBoundingClientRect();
     const scale = Math.max(2, Math.ceil(3840 / Math.max(1, rect.width)));
-    const dataUrl = await toPng(flowWrap.value, { cacheBust: true, pixelRatio: scale, backgroundColor: '#ffffff' });
+    const dataUrl = await toPng(flowWrap.value, { cacheBust: true, pixelRatio: scale, backgroundColor: '#020617' });
     const a = document.createElement('a');
     a.href = dataUrl;
     a.download = '思维导图_4k.png';
@@ -668,10 +668,13 @@ function onWindowClickCloseMenu(e) {
 .toolbar-hint { font-size: 11px; color: #94a3b8; margin-left: 4px; }
 .flow-wrap {
   height: 520px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   overflow: hidden;
-  background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
+  background: radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.14), transparent 55%),
+    radial-gradient(circle at 100% 0%, rgba(45, 212, 191, 0.14), transparent 50%),
+    rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(18px);
 }
 /* 拖拽/点击时不要改用 Vue Flow 默认选中高亮（避免「变色」） */
 .flow-wrap :deep(.vue-flow__node) {
