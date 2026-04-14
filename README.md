@@ -87,6 +87,22 @@ npm run dev
 Windows 也可双击根目录 `**dev.cmd`**（等价于上述命令）。
 启动前会自动释放旧的 `5173 / 8003 / 8001` 监听，避免页面继续连到历史残留进程。
 
+### GitHub 推送（网络不稳时）
+
+若你本机访问 GitHub 不稳定，可使用仓库内脚本走本地代理推送（默认 `127.0.0.1:7897`）：
+
+```bash
+bash scripts/git-push-proxy.sh
+```
+
+如需自定义代理地址：
+
+```bash
+PROXY_HOST=127.0.0.1 PROXY_PORT=7899 bash scripts/git-push-proxy.sh
+```
+
+说明：该方式仅对当前命令生效，不会修改全局 Git 配置。
+
 **仅启动前端（需另开终端先执行第 3 步启动后端，否则 /api 会失败）**
 
 ```bash

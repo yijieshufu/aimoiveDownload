@@ -1,5 +1,6 @@
 .cursor/
 node_modules/
+.codex-logs/
 # Windows reserved name; accidental empty file in repo root
 nul
 temp/
