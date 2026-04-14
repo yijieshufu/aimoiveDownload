@@ -1,4 +1,5 @@
 .cursor/
+node_modules/
 # Windows reserved name; accidental empty file in repo root
 nul
 temp/

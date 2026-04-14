@@ -34,28 +34,28 @@ export async function apiSaveMindmap(taskId, mindmap) {
   return await resp.json();
 }
 
-export async function apiGetSummaryEdit(taskId) {
-  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/summary-edit`, {
+export async function apiGetNotesEdit(taskId) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/notes-edit`, {
     method: 'GET',
   });
-  if (!resp.ok) throw new Error((await readError(resp)) || 'load summary edit failed');
+  if (!resp.ok) throw new Error((await readError(resp)) || 'load notes edit failed');
   return await resp.json();
 }
 
-export async function apiSaveSummaryEdit(taskId, sections) {
-  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/summary-edit`, {
+export async function apiSaveNotesEdit(taskId, noteSections) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/notes-edit`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sections }),
+    body: JSON.stringify({ note_sections: noteSections }),
   });
-  if (!resp.ok) throw new Error((await readError(resp)) || 'save summary edit failed');
+  if (!resp.ok) throw new Error((await readError(resp)) || 'save notes edit failed');
   return await resp.json();
 }
 
-export async function apiDeleteSummaryEdit(taskId) {
-  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/summary-edit`, {
+export async function apiDeleteNotesEdit(taskId) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/notes-edit`, {
     method: 'DELETE',
   });
-  if (!resp.ok) throw new Error((await readError(resp)) || 'delete summary edit failed');
+  if (!resp.ok) throw new Error((await readError(resp)) || 'delete notes edit failed');
   return await resp.json();
 }

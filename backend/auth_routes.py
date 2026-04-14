@@ -21,7 +21,7 @@ def _public_base_url(request: Request) -> str:
         return env.rstrip("/")
     # best-effort fallback for local dev
     scheme = request.url.scheme
-    host = request.headers.get("host") or "127.0.0.1:8001"
+    host = request.headers.get("host") or "127.0.0.1:8003"
     return f"{scheme}://{host}"
 
 
@@ -263,4 +263,3 @@ async def api_me(request: Request):
         "plan": sub.get("plan") or "free",
         "usage": build_usage_snapshot(request, uid, sub),
     }
-

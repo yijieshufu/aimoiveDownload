@@ -468,7 +468,7 @@
             document.getElementById('summary-empty-hint')?.classList.remove('hidden');
 
             try {
-                const response = await fetch('http://localhost:8001/api/extract', {
+                const response = await fetch('http://localhost:8003/api/extract', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -595,7 +595,7 @@
                     alert('请输入视频URL');
                     return;
                 }
-                const response = await fetch(`http://localhost:8001/api/download?url=${encodeURIComponent(url)}&format_id=${formatId}`, {
+                const response = await fetch(`http://localhost:8003/api/download?url=${encodeURIComponent(url)}&format_id=${formatId}`, {
                     method: 'GET'
                 });
 
@@ -731,7 +731,7 @@
             switchSummaryTab('summary');
 
             try {
-                const resp = await fetch('http://localhost:8001/api/summarize', {
+                const resp = await fetch('http://localhost:8003/api/summarize', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url })
@@ -754,7 +754,7 @@
         async function pollSummaryTask(taskId) {
             const maxPoll = 120;
             for (let i = 0; i < maxPoll; i++) {
-                const resp = await fetch(`http://localhost:8001/api/summarize/${encodeURIComponent(taskId)}`);
+                const resp = await fetch(`http://localhost:8003/api/summarize/${encodeURIComponent(taskId)}`);
                 if (!resp.ok) {
                     const err = await safeReadError(resp);
                     throw new Error(err || '查询总结任务失败');
@@ -798,7 +798,7 @@
             highlightList.innerHTML = highlights.map((h, idx) => `<li id="hl-${idx}" data-ts="${Number(h.ts || 0)}">[${formatDuration(h.ts || 0)}] ${escapeHtml(h.text || '')}</li>`).join('');
 
             if (result.markdown_download_url) {
-                downloadMdBtn.href = `http://localhost:8001${result.markdown_download_url}`;
+                downloadMdBtn.href = `http://localhost:8003${result.markdown_download_url}`;
                 downloadMdBtn.classList.remove('hidden');
             }
 
@@ -1177,7 +1177,7 @@
             qaAskBtn.disabled = true;
             qaAnswer.textContent = 'AI 思考中...';
             try {
-                const resp = await fetch(`http://localhost:8001/api/summarize/${encodeURIComponent(currentSummaryTaskId)}/qa`, {
+                const resp = await fetch(`http://localhost:8003/api/summarize/${encodeURIComponent(currentSummaryTaskId)}/qa`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ question })
@@ -1296,7 +1296,7 @@
         downloadFileBtn.addEventListener('click', () => {
             if (currentDownloadResult && currentDownloadResult.file_path) {
                 // 调用文件下载接口
-                window.location.href = `http://localhost:8001/api/download/file?file_path=${encodeURIComponent(currentDownloadResult.file_path)}`;
+                window.location.href = `http://localhost:8003/api/download/file?file_path=${encodeURIComponent(currentDownloadResult.file_path)}`;
             } else {
                 alert('没有可下载的文件');
             }

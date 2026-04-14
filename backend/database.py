@@ -52,8 +52,8 @@ def get_db():
 
 
 _DEFAULT_TABS = [
-    ("summary", "摘要", "system", 0, 1),
-    ("highlights", "时间轴", "system", 1, 1),
+    ("summary", "AI笔记", "system", 0, 1),
+    ("highlights", "时间笔记", "system", 1, 1),
     ("transcript", "字幕稿", "system", 2, 1),
     ("mindmap", "思维导图", "system", 3, 1),
     ("qa", "问答", "system", 4, 1),
@@ -134,11 +134,21 @@ def init_db() -> None:
             );
             """
         )
-        conn.execute("DELETE FROM ui_tabs WHERE id = ?", ("chapters",))
+        conn.execute("DELETE FROM ui_tabs WHERE id IN (?, ?)", ("chapters", "note"))
+        now = int(time.time())
         count = conn.execute("SELECT COUNT(*) AS n FROM ui_tabs").fetchone()["n"]
         if count == 0:
-            now = int(time.time())
             for tid, name, typ, order_idx, vis in _DEFAULT_TABS:
+                conn.execute(
+                    "INSERT INTO ui_tabs (id,name,type,order_index,visible,updated_at) VALUES (?,?,?,?,?,?)",
+                    (tid, name, typ, order_idx, vis, now),
+                )
+        else:
+            # 兼容旧库：新增默认 system tab 时，自动补齐缺失项（不覆盖用户自定义顺序/可见性）。
+            for tid, name, typ, order_idx, vis in _DEFAULT_TABS:
+                row = conn.execute("SELECT id FROM ui_tabs WHERE id=?", (tid,)).fetchone()
+                if row:
+                    continue
                 conn.execute(
                     "INSERT INTO ui_tabs (id,name,type,order_index,visible,updated_at) VALUES (?,?,?,?,?,?)",
                     (tid, name, typ, order_idx, vis, now),

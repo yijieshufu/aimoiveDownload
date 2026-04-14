@@ -1,12 +1,11 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { VueFlow, useVueFlow } from '@vue-flow/core';
-import { Controls } from '@vue-flow/controls';
 import { Background } from '@vue-flow/background';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
-import '@vue-flow/controls/dist/style.css';
 import { toPng, toSvg } from 'html-to-image';
+// 轻编辑版：不做一级折叠/多布局，减少心智与工具栏负担
 
 const props = defineProps({
   mindmap: { type: Object, default: () => ({ title: '视频主题', children: [] }) },
@@ -26,7 +25,24 @@ const contextMenu = ref({ visible: false, x: 0, y: 0, nodeId: '' });
 const nodes = ref([]);
 const edges = ref([]);
 const nodeMap = ref(new Map());
-const { fitView, zoomIn, zoomOut, setCenter } = useVueFlow();
+const { fitView, zoomIn, zoomOut } = useVueFlow();
+
+/** 柔和 pastel，与「文本+下划线」风格搭配 */
+const BRANCH_PALETTE = ['#d97757', '#6ea8d9', '#8b7cb8', '#6b9e7d', '#c4a35a', '#5a9ba8', '#d4a574', '#7b9ed1'];
+
+/** 仅由节点 id 决定颜色，避免拖拽后子节点顺序变化导致配色跳变 */
+function stableBranchColor(nodeId) {
+  let h = 2166136261;
+  const s = String(nodeId || 'x');
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return BRANCH_PALETTE[(Math.abs(h) >>> 0) % BRANCH_PALETTE.length];
+}
+
+/** 当前导图数据（用于布局/导出/保存） */
+const mindmapInternal = ref({ title: '视频主题', children: [] });
 
 function cleanName(name) {
   const s = String(name || '').trim();
@@ -71,20 +87,59 @@ function mindmapStructureSignature(tree) {
   return JSON.stringify([tree.title, (tree.children || []).map(nodeSig)]);
 }
 
-function buildGraph(tree, opts = {}) {
+function edgeDefaults(stroke, strokeWidth) {
+  return {
+    type: 'default',
+    animated: false,
+    style: {
+      '--mm-edge': stroke,
+      stroke: stroke,
+      fill: 'none',
+      strokeWidth,
+      strokeOpacity: 0.88,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    },
+  };
+}
+
+/** 文本框风：白底 + 圆角 + 细边框 */
+function cleanNodeStyle(color, { isRoot = false, depth = 1 } = {}) {
+  const accent = color || '#94a3b8';
+  const borderAlpha = isRoot ? 0.55 : depth <= 2 ? 0.45 : 0.35;
+  const bg = isRoot ? 'rgba(255,255,255,0.94)' : 'rgba(255,255,255,0.92)';
+  // html-to-image 在部分浏览器/环境下对 color-mix/复杂阴影兼容性较差，导出会出现黑块伪影
+  const safeBorder = `rgba(148, 163, 184, ${borderAlpha})`;
+  return {
+    '--mm-border-accent': accent,
+    '--mm-edge': accent,
+    background: bg,
+    border: `1px solid ${safeBorder}`,
+    color: isRoot ? '#0f172a' : depth <= 2 ? '#1e293b' : '#334155',
+    borderRadius: isRoot ? '12px' : '10px',
+    padding: isRoot ? '8px 12px' : '7px 10px',
+    fontWeight: isRoot ? '600' : depth <= 2 ? '500' : '400',
+    fontSize: isRoot ? '14px' : '13px',
+    maxWidth: '240px',
+    lineHeight: '1.5',
+    boxShadow: 'none',
+  };
+}
+
+function buildGraphBilateral(tree, opts = {}) {
   const preservePositions = opts.preservePositions !== false;
+  const onlyRight = opts.onlyRight === true;
   const prevPos = preservePositions ? new Map(nodes.value.map((x) => [x.id, { ...x.position }])) : new Map();
 
-  const palette = ['#f97316', '#ef4444', '#22c55e', '#3b82f6', '#a855f7', '#14b8a6', '#f59e0b', '#06b6d4'];
   const n = [];
   const e = [];
   const map = new Map();
 
-  const colW = 230;
-  const rowH = 78;
-  const gapY = 12;
-  const gapBranch = 24;
-  const branchDeltaX = 36;
+  const colW = 248;
+  const rowH = 86;
+  const gapY = 16;
+  const gapBranch = 32;
+  const branchDeltaX = 40;
 
   function subtreeHeight(node) {
     const ch = node.children || [];
@@ -95,18 +150,6 @@ function buildGraph(tree, opts = {}) {
       if (i < ch.length - 1) h += gapY;
     });
     return Math.max(rowH, h);
-  }
-
-  function edgeDefaults(stroke, strokeWidth) {
-    return {
-      type: 'smoothstep',
-      animated: false,
-      style: {
-        '--mm-edge': stroke,
-        stroke: 'var(--mm-edge)',
-        strokeWidth,
-      },
-    };
   }
 
   function placeDescendants(parentNode, parentId, bandTop, bandBottom, sign, color, branchIdx, depth) {
@@ -124,22 +167,15 @@ function buildGraph(tree, opts = {}) {
         type: 'default',
         position: { x, y: cy },
         data: { label: child.name, mmBranchColor: color },
-        style: {
-          '--mm-bg': 'rgba(255,255,255,0.06)',
-          '--mm-border': `${color}55`,
-          background: 'var(--mm-bg)',
-          color: '#e5e7eb',
-          borderRadius: '10px',
-          padding: '6px 10px',
-          border: '1px solid var(--mm-border)',
-        },
+        class: depth <= 2 ? 'mm-node--l1' : 'mm-node--deep',
+        style: cleanNodeStyle(color, { isRoot: false, depth }),
         draggable: true,
       });
       e.push({
         id: `e_${parentId}_${child.id}`,
         source: parentId,
         target: child.id,
-        ...edgeDefaults(color, 1.6),
+        ...edgeDefaults(color, 1.15),
       });
       map.set(child.id, child);
       placeDescendants(child, child.id, y, y + h, sign, color, branchIdx, depth + 1);
@@ -160,22 +196,15 @@ function buildGraph(tree, opts = {}) {
         type: 'default',
         position: { x: sign * colW, y: yCenter },
         data: { label: item.node.name, mmBranchColor: item.color },
-        style: {
-          '--mm-bg': 'rgba(255,255,255,0.08)',
-          '--mm-border': `${item.color}aa`,
-          background: 'var(--mm-bg)',
-          color: '#f8fafc',
-          borderRadius: '12px',
-          padding: '6px 10px',
-          border: '1px solid var(--mm-border)',
-        },
+        class: 'mm-node--l1',
+        style: cleanNodeStyle(item.color, { isRoot: false, depth: 2 }),
         draggable: true,
       });
       e.push({
         id: `e_root_${item.node.id}`,
         source: 'root',
         target: item.node.id,
-        ...edgeDefaults(item.color, 2.5),
+        ...edgeDefaults(item.color, 1.35),
       });
       map.set(item.node.id, item.node);
       placeDescendants(item.node, item.node.id, yTop, yTop + th, sign, item.color, branchIdx, 2);
@@ -188,27 +217,27 @@ function buildGraph(tree, opts = {}) {
     type: 'default',
     position: { x: 0, y: 0 },
     data: { label: tree.title, mmRoot: true },
-    style: {
-      '--mm-bg': '#020617',
-      '--mm-border': 'rgba(255,255,255,0.16)',
-      background: 'var(--mm-bg)',
-      color: '#fff',
-      borderRadius: '14px',
-      padding: '8px 14px',
-      border: '1px solid var(--mm-border)',
-    },
+    class: 'mm-node--root',
+    style: cleanNodeStyle('#64748b', { isRoot: true, depth: 0 }),
     draggable: true,
   });
   map.set('root', { title: tree.title, children: [] });
 
-  const right = [];
-  const left = [];
-  (tree.children || []).forEach((c, idx) =>
-    (idx % 2 === 0 ? right : left).push({ node: c, parent: 'root', color: palette[idx % palette.length] })
-  );
-
-  placeSide(right, 1);
-  placeSide(left, -1);
+  if (onlyRight) {
+    const right = [];
+    (tree.children || []).forEach((c) => {
+      right.push({ node: c, parent: 'root', color: stableBranchColor(c.id) });
+    });
+    placeSide(right, 1);
+  } else {
+    const right = [];
+    const left = [];
+    (tree.children || []).forEach((c, idx) =>
+      (idx % 2 === 0 ? right : left).push({ node: c, parent: 'root', color: stableBranchColor(c.id) })
+    );
+    placeSide(right, 1);
+    placeSide(left, -1);
+  }
 
   if (preservePositions) {
     for (const node of n) {
@@ -220,6 +249,104 @@ function buildGraph(tree, opts = {}) {
   nodes.value = n;
   edges.value = e;
   nodeMap.value = map;
+}
+
+function buildGraphTreeDown(tree, opts = {}) {
+  const preservePositions = opts.preservePositions !== false;
+  const prevPos = preservePositions ? new Map(nodes.value.map((x) => [x.id, { ...x.position }])) : new Map();
+  const NODE_W = 240;
+  const NODE_H = 80;
+  const GAP_X = 36;
+  const GAP_Y = 44;
+  const n = [];
+  const e = [];
+  const map = new Map();
+
+  function subtreeSpanWidth(node) {
+    const ch = node.children || [];
+    if (!ch.length) return NODE_W;
+    let total = 0;
+    ch.forEach((c, i) => {
+      total += subtreeSpanWidth(c) + (i > 0 ? GAP_X : 0);
+    });
+    return Math.max(NODE_W, total);
+  }
+
+  function placeBranch(node, parentId, centerX, topY, color, depth) {
+    const isL1 = depth === 1;
+    const col = color || stableBranchColor(node.id);
+    n.push({
+      id: node.id,
+      type: 'default',
+      position: { x: centerX - NODE_W / 2, y: topY },
+      data: { label: node.name, mmBranchColor: col },
+      class: isL1 ? 'mm-node--l1' : 'mm-node--deep',
+      style: cleanNodeStyle(col, { isRoot: false, depth }),
+      draggable: true,
+    });
+    map.set(node.id, node);
+    if (parentId) {
+      e.push({
+        id: `e_${parentId}_${node.id}`,
+        source: parentId,
+        target: node.id,
+        ...edgeDefaults(col, depth <= 1 ? 1.35 : 1.15),
+      });
+    }
+    const ch = node.children || [];
+    if (!ch.length) return;
+    const widths = ch.map(subtreeSpanWidth);
+    const totalW = widths.reduce((a, b) => a + b, 0) + (ch.length - 1) * GAP_X;
+    let x0 = centerX - totalW / 2;
+    const childY = topY + NODE_H + GAP_Y;
+    ch.forEach((child, i) => {
+      const w = widths[i];
+      const cx = x0 + w / 2;
+      placeBranch(child, node.id, cx, childY, col, depth + 1);
+      x0 += w + GAP_X;
+    });
+  }
+
+  n.push({
+    id: 'root',
+    type: 'default',
+    position: { x: -NODE_W / 2, y: 0 },
+    data: { label: tree.title, mmRoot: true },
+    class: 'mm-node--root',
+    style: cleanNodeStyle('#64748b', { isRoot: true, depth: 0 }),
+    draggable: true,
+  });
+  map.set('root', { title: tree.title, children: [] });
+
+  const children = tree.children || [];
+  if (children.length) {
+    const widths = children.map(subtreeSpanWidth);
+    const totalW = widths.reduce((a, b) => a + b, 0) + (children.length - 1) * GAP_X;
+    let x0 = -totalW / 2;
+    const childY = NODE_H + GAP_Y;
+    children.forEach((child, i) => {
+      const w = widths[i];
+      const cx = x0 + w / 2;
+      placeBranch(child, 'root', cx, childY, stableBranchColor(child.id), 1);
+      x0 += w + GAP_X;
+    });
+  }
+
+  if (preservePositions) {
+    for (const node of n) {
+      const p = prevPos.get(node.id);
+      if (p) node.position = { ...p };
+    }
+  }
+
+  nodes.value = n;
+  edges.value = e;
+  nodeMap.value = map;
+}
+
+function buildGraph(tree, opts = {}) {
+  // 轻编辑版固定单侧向右布局，减少心智与 UI
+  buildGraphBilateral(tree, { ...opts, onlyRight: true });
 }
 
 function exportTreeFromGraph() {
@@ -252,7 +379,15 @@ function exportTreeFromGraph() {
 }
 
 function emitChange() {
-  emit('change', exportTreeFromGraph());
+  const visible = exportTreeFromGraph();
+  mindmapInternal.value = JSON.parse(JSON.stringify(visible));
+  emit('change', mindmapInternal.value);
+}
+
+function onNodeClick(payload) {
+  const node = payload?.node;
+  if (!node) return;
+  selectedNodeId.value = node.id;
 }
 
 function onNodeDragStop() {
@@ -282,28 +417,23 @@ function openAddNodeDialog(pid) {
   closeContextMenu();
   const id = `n_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 6)}`;
   const p = parent;
+  const branchColor = p.data?.mmBranchColor || (pid === 'root' ? stableBranchColor(id) : '#64748b');
   nodes.value.push({
     id,
     position: { x: p.position.x + 220, y: p.position.y + 40 },
-    data: { label: '新节点' },
-    style: {
-      '--mm-bg': '#f8fafc',
-      '--mm-border': '#cbd5e1',
-      background: 'var(--mm-bg)',
-      border: '1px solid var(--mm-border)',
-      borderRadius: '10px',
-      padding: '6px 10px',
-    },
+    data: { label: '新节点', mmBranchColor: branchColor },
+    class: 'mm-node--deep',
+    style: cleanNodeStyle(branchColor, { isRoot: false, depth: 3 }),
     draggable: true,
   });
   edges.value.push({
     id: `e_${pid}_${id}`,
     source: pid,
     target: id,
-    type: 'smoothstep',
+    type: 'default',
     animated: false,
     style: {
-      '--mm-edge': '#94a3b8',
+      '--mm-edge': branchColor,
       stroke: 'var(--mm-edge)',
       strokeWidth: 1.8,
     },
@@ -343,9 +473,24 @@ function cancelRenameDialog() {
 function onNodeContextMenu(evt) {
   const e = evt?.event || evt;
   if (e?.preventDefault) e.preventDefault();
+  if (e?.stopPropagation) e.stopPropagation();
   const node = evt?.node;
   if (!node) return;
   contextMenu.value = { visible: true, x: e.clientX, y: e.clientY, nodeId: node.id };
+}
+
+function onPaneContextMenu(evt) {
+  const e = evt?.event || evt;
+  if (e?.preventDefault) e.preventDefault();
+  if (e?.stopPropagation) e.stopPropagation();
+  // 画布右键：默认对 root 添加子节点
+  contextMenu.value = { visible: true, x: e.clientX, y: e.clientY, nodeId: 'root' };
+}
+
+function onWrapContextMenu(e) {
+  if (e?.preventDefault) e.preventDefault();
+  // 若是节点区域，节点自身右键逻辑会先处理；这里兜底画布右键
+  contextMenu.value = { visible: true, x: e.clientX, y: e.clientY, nodeId: 'root' };
 }
 
 function onNodeDoubleClick(evt) {
@@ -396,14 +541,7 @@ function addSibling() {
   if (!sid || sid === 'root') return;
   const parentEdge = edges.value.find((x) => x.target === sid);
   if (!parentEdge) return;
-  selectedNodeId.value = parentEdge.source;
-  addChild();
-}
-
-function renameNode() {
-  const sid = selectedNodeId.value;
-  if (!sid) return;
-  openRenameDialog(sid);
+  openAddNodeDialog(parentEdge.source);
 }
 
 function deleteNode() {
@@ -426,29 +564,90 @@ function deleteNode() {
   emitChange();
 }
 
-function autoArrange() {
-  const tree = exportTreeFromGraph();
-  buildGraph(tree, { preservePositions: false });
-  setTimeout(() => fitView({ padding: 0.2, includeHiddenNodes: true }), 30);
-  emitChange();
-}
-
-function centerRoot() {
-  const r = nodes.value.find((x) => x.id === 'root');
-  if (!r) return;
-  setCenter(r.position.x, r.position.y, { duration: 250, zoom: 1 });
-}
-
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value;
   setTimeout(() => fitView({ padding: 0.2, includeHiddenNodes: true }), 60);
 }
 
+const EXPORT_BG = '#f8fafc';
+
+function exportImageFilter(node) {
+  if (!node || node.nodeType !== 1) return true;
+  const el = node;
+  if (typeof el.classList?.contains === 'function' && el.classList.contains('vue-flow__controls')) {
+    return false;
+  }
+  return true;
+}
+
+function onExportClone(_clonedDoc, clonedElement) {
+  const wrap =
+    clonedElement?.classList?.contains?.('flow-wrap') === true
+      ? clonedElement
+      : clonedElement?.querySelector?.('.flow-wrap');
+  if (!wrap) return;
+  wrap.style.setProperty('backdrop-filter', 'none', 'important');
+  wrap.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
+  wrap.style.setProperty('background', EXPORT_BG, 'important');
+}
+
+function normalizeSvgExportString(raw) {
+  let s = String(raw ?? '').trim().replace(/^\uFEFF/, '');
+  if (!s) return null;
+  const head = s.slice(0, 64).toLowerCase();
+  if (head.startsWith('data:image/svg+xml')) {
+    const comma = s.indexOf(',');
+    if (comma === -1) return null;
+    const meta = s.slice(0, comma);
+    const data = s.slice(comma + 1);
+    if (/;base64/i.test(meta)) {
+      try {
+        s = atob(data);
+      } catch {
+        return null;
+      }
+    } else {
+      try {
+        s = decodeURIComponent(data);
+      } catch {
+        return null;
+      }
+    }
+  }
+  const t = s.trim();
+  if (!/^<\?xml/i.test(t) && !/^<svg/i.test(t)) return null;
+  if (!/^<\?xml/i.test(t)) {
+    s = `<?xml version="1.0" encoding="UTF-8"?>\n${t}`;
+  }
+  return s;
+}
+
+async function prepareMindmapForExport() {
+  buildGraph(mindmapInternal.value, { preservePositions: false });
+  await nextTick();
+  fitView({ padding: 0.15, includeHiddenNodes: true, duration: 0 });
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+const imageExportBaseOptions = {
+  cacheBust: true,
+  backgroundColor: EXPORT_BG,
+  filter: exportImageFilter,
+  skipFonts: true,
+  onclone: onExportClone,
+};
+
 async function exportSvg() {
   if (!flowWrap.value) return;
   isExporting.value = true;
   try {
-    const svg = await toSvg(flowWrap.value, { cacheBust: true });
+    await prepareMindmapForExport();
+    const raw = await toSvg(flowWrap.value, imageExportBaseOptions);
+    const svg = normalizeSvgExportString(raw);
+    if (!svg) {
+      window.alert('SVG 导出失败：无法生成有效矢量内容，请尝试导出 PNG。');
+      return;
+    }
     const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -456,6 +655,8 @@ async function exportSvg() {
     a.download = '思维导图.svg';
     a.click();
     URL.revokeObjectURL(url);
+  } catch (e) {
+    window.alert(`SVG 导出失败：${String(e?.message || e)}`);
   } finally {
     isExporting.value = false;
   }
@@ -465,13 +666,16 @@ async function exportPng4k() {
   if (!flowWrap.value) return;
   isExporting.value = true;
   try {
+    await prepareMindmapForExport();
     const rect = flowWrap.value.getBoundingClientRect();
-    const scale = Math.max(2, Math.ceil(3840 / Math.max(1, rect.width)));
-    const dataUrl = await toPng(flowWrap.value, { cacheBust: true, pixelRatio: scale, backgroundColor: '#020617' });
+    const scale = Math.min(3, Math.max(2, Math.ceil(3840 / Math.max(1, rect.width))));
+    const dataUrl = await toPng(flowWrap.value, { ...imageExportBaseOptions, pixelRatio: scale });
     const a = document.createElement('a');
     a.href = dataUrl;
     a.download = '思维导图_4k.png';
     a.click();
+  } catch (e) {
+    window.alert(`PNG 导出失败：${String(e?.message || e)}`);
   } finally {
     isExporting.value = false;
   }
@@ -487,7 +691,8 @@ watch(
     const sig = mindmapStructureSignature(cleaned);
     if (sig === lastMindmapSig.value && lastMindmapSig.value !== '') return;
     lastMindmapSig.value = sig;
-    buildGraph(cleaned, { preservePositions: true });
+    mindmapInternal.value = JSON.parse(JSON.stringify(cleaned));
+    buildGraph(mindmapInternal.value, { preservePositions: true });
     if (!didInitialFit.value) {
       didInitialFit.value = true;
       await nextTick();
@@ -499,12 +704,12 @@ watch(
 
 const rootCls = computed(() => (isFullscreen.value ? 'mindmap-root mindmap-root-fullscreen' : 'mindmap-root'));
 
-const contextMenuSiblingDisabled = computed(() => {
+const contextMenuDeleteDisabled = computed(() => {
   const id = contextMenu.value.nodeId;
   return !id || id === 'root';
 });
 
-const contextMenuDeleteDisabled = computed(() => {
+const contextMenuSiblingDisabled = computed(() => {
   const id = contextMenu.value.nodeId;
   return !id || id === 'root';
 });
@@ -527,19 +732,7 @@ function onKeydown(e) {
   }
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
-  if (e.key === 'F2') {
-    e.preventDefault();
-    const sid = selectedNodeId.value;
-    if (sid) openRenameDialog(sid);
-    return;
-  }
-  if (e.key === 'Delete' || e.key === 'Backspace') {
-    const sid = selectedNodeId.value;
-    if (sid && sid !== 'root') {
-      e.preventDefault();
-      deleteNode();
-    }
-  }
+  // 轻编辑版：不提供 F2 / Del 等编辑器快捷键，避免误触
 }
 
 watch(
@@ -574,22 +767,18 @@ function onWindowClickCloseMenu(e) {
   <div :class="rootCls">
     <div class="toolbar">
       <button @click="addChild">添加子节点</button>
-      <button @click="addSibling">添加兄弟节点</button>
-      <button @click="renameNode">重命名</button>
+      <button @click="addSibling">添加同级节点</button>
       <button @click="deleteNode">删除</button>
       <span class="sep"></span>
-      <button @click="autoArrange">自动排版</button>
       <button @click="() => fitView({ padding: 0.2, includeHiddenNodes: true })">适应画布</button>
-      <button @click="centerRoot">居中根节点</button>
       <button @click="zoomOut">缩小</button>
       <button @click="zoomIn">放大</button>
       <button type="button" @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏' }}</button>
       <span class="sep"></span>
       <button :disabled="isExporting" @click="exportSvg">导出 SVG</button>
       <button :disabled="isExporting" @click="exportPng4k">导出 PNG（4K+）</button>
-      <span class="toolbar-hint">画布：双击编辑 · 右键菜单 · F2 重命名 · Del 删除</span>
     </div>
-    <div ref="flowWrap" class="flow-wrap">
+    <div ref="flowWrap" class="flow-wrap" @contextmenu.prevent="onWrapContextMenu">
       <VueFlow
         v-model:nodes="nodes"
         v-model:edges="edges"
@@ -597,15 +786,21 @@ function onWindowClickCloseMenu(e) {
         :max-zoom="2.5"
         :nodes-draggable="true"
         :nodes-selectable="false"
+        :elements-selectable="false"
+        :nodes-focusable="false"
+        :edges-focusable="false"
+        :select-nodes-on-drag="false"
+        :elevate-nodes-on-select="false"
+        :elevate-edges-on-select="false"
         :pan-on-drag="true"
         @node-drag-stop="onNodeDragStop"
-        @node-click="({ node }) => (selectedNodeId = node.id)"
+        @node-click="onNodeClick"
         @node-double-click="onNodeDoubleClick"
         @node-context-menu="onNodeContextMenu"
+        @pane-context-menu="onPaneContextMenu"
         @pane-click="onPaneClick"
       >
-        <Background />
-        <Controls />
+        <Background variant="dots" :gap="22" :size="1" pattern-color="#e2e8f0" bg-color="#f8fafc" />
       </VueFlow>
     </div>
 
@@ -617,7 +812,7 @@ function onWindowClickCloseMenu(e) {
         @click.stop
       >
         <button type="button" @click="contextAddChild">添加子节点</button>
-        <button type="button" :disabled="contextMenuSiblingDisabled" @click="contextAddSibling">添加兄弟节点</button>
+        <button type="button" :disabled="contextMenuSiblingDisabled" @click="contextAddSibling">添加同级节点</button>
         <button type="button" @click="contextRename">重命名</button>
         <button type="button" :disabled="contextMenuDeleteDisabled" class="danger" @click="contextDelete">删除</button>
       </div>
@@ -666,32 +861,47 @@ function onWindowClickCloseMenu(e) {
 .toolbar button { border: 1px solid #d1d5db; background: #fff; border-radius: 6px; padding: 4px 10px; font-size: 12px; }
 .toolbar .sep { width: 1px; background: #e5e7eb; margin: 0 2px; align-self: stretch; min-height: 20px; }
 .toolbar-hint { font-size: 11px; color: #94a3b8; margin-left: 4px; }
+.toolbar-layout-label { font-size: 12px; color: #64748b; margin-right: 2px; }
+.toolbar-select {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #0f172a;
+  max-width: 9rem;
+}
 .flow-wrap {
   height: 520px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
   overflow: hidden;
-  background: radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.14), transparent 55%),
-    radial-gradient(circle at 100% 0%, rgba(45, 212, 191, 0.14), transparent 50%),
-    rgba(2, 6, 23, 0.72);
-  backdrop-filter: blur(18px);
+  background: #f8fafc;
 }
-/* 拖拽/点击时不要改用 Vue Flow 默认选中高亮（避免「变色」） */
+/* 节点：文本框风（避免覆盖 inline style，否则导出会出现伪影） */
 .flow-wrap :deep(.vue-flow__node) {
   transition: none !important;
 }
-.flow-wrap :deep(.vue-flow__node-default),
-.flow-wrap :deep(.vue-flow__node-default:hover),
-.flow-wrap :deep(.vue-flow__node.selected .vue-flow__node-default),
-.flow-wrap :deep(.vue-flow__node.dragging .vue-flow__node-default),
-.flow-wrap :deep(.vue-flow__node:focus .vue-flow__node-default),
-.flow-wrap :deep(.vue-flow__node:focus-visible .vue-flow__node-default) {
-  background: var(--mm-bg) !important;
-  border-color: var(--mm-border) !important;
-  box-shadow: none !important;
+.flow-wrap :deep(.vue-flow__node-default:focus),
+.flow-wrap :deep(.vue-flow__node-default:focus-visible) {
   outline: none !important;
-  filter: none !important;
-  opacity: 1 !important;
+}
+.flow-wrap :deep(.vue-flow__node-label) {
+  display: inline-block;
+  max-width: 240px;
+  line-height: 1.5;
+  word-break: break-word;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.flow-wrap :deep(.vue-flow__handle) {
+  width: 8px !important;
+  height: 8px !important;
+  min-width: 8px !important;
+  min-height: 8px !important;
+  border: 1.5px solid var(--mm-edge, #94a3b8) !important;
+  background: #fff !important;
+  border-radius: 50%;
 }
 .flow-wrap :deep(.vue-flow__node.selected),
 .flow-wrap :deep(.vue-flow__node:focus),
@@ -723,6 +933,10 @@ function onWindowClickCloseMenu(e) {
 .flow-wrap :deep(.vue-flow__edge:focus .vue-flow__edge-path),
 .flow-wrap :deep(.vue-flow__edge:focus-visible .vue-flow__edge-path) {
   stroke: var(--mm-edge) !important;
+  fill: none !important;
+}
+.flow-wrap :deep(.vue-flow__edge-interaction) {
+  stroke: transparent !important;
 }
 .mindmap-context-menu {
   display: flex;

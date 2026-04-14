@@ -88,7 +88,7 @@ function onStartDownload() {
 </script>
 
 <template>
-  <section class="lg:col-span-4 space-y-4">
+  <section class="lg:col-span-4 space-y-4 print-hidden">
     <div class="glass-card p-4">
       <div class="flex items-center justify-between mb-2">
         <div class="text-[11px] font-semibold tracking-[0.14em] uppercase text-slate-400">视频预览</div>

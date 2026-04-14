@@ -1,4 +1,9 @@
-# 视频下载功能总结
+# 视频下载功能总结（历史摘要）
+
+> 说明：本文件为早期阶段总结，保留用于回顾。  
+> 当前版本的功能盘点与技术现状，请优先查看：
+> - [COMPLETED_FEATURES.md](./COMPLETED_FEATURES.md)
+> - [PRODUCT_STATUS.md](./PRODUCT_STATUS.md)
 
 ## 项目目标
 
@@ -58,12 +63,13 @@
 ## 运行方式
 
 ```bash
-uvicorn backend.main:app --host 0.0.0.0 --port 8001
+npm run dev
 ```
 
 页面入口：
 
-- `http://localhost:8001/frontend/index.html`
+- `http://127.0.0.1:5173/frontend/`
+- `http://127.0.0.1:8003`
 
 ## 结论
 

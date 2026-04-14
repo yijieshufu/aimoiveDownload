@@ -11,8 +11,40 @@ import re
 
 from .douyin_parser import extract_douyin_info, download_douyin_video, is_douyin_url
 
+
+def shorten_windows_path(path: str) -> str:
+    """尽量缩短路径，降低 Win32 CreateFile EINVAL 概率。"""
+    if sys.platform != "win32":
+        return path
+    try:
+        import ctypes
+
+        os.makedirs(path, exist_ok=True)
+        buf = ctypes.create_unicode_buffer(4096)
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        n = k32.GetShortPathNameW(ctypes.c_wchar_p(path), buf, len(buf))
+        if n and buf.value:
+            return buf.value
+    except Exception:
+        pass
+    return path
+
+
+def windows_long_path(abs_path: str) -> str:
+    """为绝对路径加 \\\\?\\ 前缀，便于突破 MAX_PATH（仅 win32）。"""
+    if sys.platform != "win32":
+        return abs_path
+    p = os.path.abspath(os.path.normpath(abs_path))
+    if p.startswith("\\\\?\\"):
+        return p
+    if p.startswith("\\\\"):
+        rest = p[2:].replace("/", "\\").lstrip("\\")
+        return "\\\\?\\UNC\\" + rest
+    return "\\\\?\\" + p
+
+
 # 确保临时目录存在（绝对路径，避免 Windows 下子进程/合并输出路径异常）
-temp_dir = os.path.abspath(os.path.join(os.getcwd(), "temp"))
+temp_dir = shorten_windows_path(os.path.abspath(os.path.join(os.getcwd(), "temp")))
 os.makedirs(temp_dir, exist_ok=True)
 cookie_file_path = os.path.join(temp_dir, "cookies.txt")
 BROWSER_COOKIE_CANDIDATES = ("edge", "chrome", "chromium", "firefox")
@@ -47,6 +79,11 @@ def format_user_ytdlp_error(exc: BaseException) -> str:
     if "ffmpeg" in low or "ffprobe" in low or ("merge" in low and "audio" in low):
         return "音视频处理失败：请确认已安装 ffmpeg/ffprobe 且在 PATH 中可用。"
     return text[:420] + ("…" if len(text) > 420 else "")
+
+
+def _is_invalid_argument_error(exc: BaseException) -> bool:
+    low = str(exc).lower()
+    return ("invalid argument" in low) or ("errno 22" in low)
 
 
 def _format_is_ultra_hd(fmt: Optional[Dict]) -> bool:
@@ -224,7 +261,8 @@ def _apply_platform_ydl_defaults(opts: Dict, url: str) -> None:
         merged = {**merged, **h}
     opts["http_headers"] = merged
     if sys.platform == "win32":
-        opts.setdefault("windows_filenames", True)
+        # YoutubeDL 参数名为 windowsfilenames（非 windows_filenames），否则不会生效
+        opts.setdefault("windowsfilenames", True)
         opts.setdefault("restrictfilenames", True)
 
 
@@ -515,7 +553,14 @@ def download_video(url: str, format_id: str, *, allow_ultra_hd: bool = False) ->
                 "file_size": os.path.getsize(output_file),
                 "ext": os.path.splitext(output_file)[1][1:],
             }
-        except Exception:
+        except Exception as ex:
+            # 抖音在某些 Windows 环境下走 yt-dlp 分片/合并时会偶发 EINVAL，
+            # 自动回退到抖音直链下载，避免用户卡死在“Invalid argument”。
+            if is_douyin_url(normalized_url) and _is_invalid_argument_error(ex):
+                try:
+                    return download_douyin_video(normalized_url, temp_dir)
+                except Exception:
+                    pass
             raise
     except Exception as e:
         raise Exception(format_user_ytdlp_error(e))

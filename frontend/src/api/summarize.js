@@ -80,3 +80,12 @@ export async function apiGetSubtitles(taskId) {
 export function apiSubtitleDownloadUrl(taskId, format) {
   return `${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/subtitles/download?format=${encodeURIComponent(format)}`;
 }
+
+export async function apiOptimizeTranscript(taskId) {
+  const resp = await fetch(`${API_BASE}/api/summarize/${encodeURIComponent(taskId)}/transcript/optimize`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  await throwIfNotOk(resp, 'optimize transcript failed');
+  return await resp.json();
+}

@@ -15,6 +15,15 @@ from .api_video import router as video_router
 from .api_summarize import router as summarize_router
 from .api_workspace import router as workspace_router
 
+
+def _parse_cors_allow_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "")
+    extras = [item.strip() for item in raw.split(",") if item.strip()]
+    return extras
+
+
+LOCAL_CORS_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+
 app = FastAPI(
     title="Video Downloader API",
     description="A powerful API for downloading videos from various platforms",
@@ -24,7 +33,8 @@ init_db()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_allow_origins(),
+    allow_origin_regex=os.getenv("CORS_ALLOW_ORIGIN_REGEX", LOCAL_CORS_ORIGIN_REGEX),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,4 +58,4 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8003)

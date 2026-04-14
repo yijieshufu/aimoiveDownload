@@ -7,10 +7,11 @@ from .database import get_db, init_db
 
 _LOCK = threading.Lock()
 _REQUIRED_TAB_IDS = {"summary", "mindmap"}
+_LEGACY_SYSTEM_TAB_IDS = {"note", "chapters"}
 
 DEFAULT_TABS = [
-    {"id": "summary", "name": "摘要", "type": "system", "order_index": 0, "visible": 1},
-    {"id": "highlights", "name": "时间轴", "type": "system", "order_index": 1, "visible": 1},
+    {"id": "summary", "name": "AI笔记", "type": "system", "order_index": 0, "visible": 1},
+    {"id": "highlights", "name": "时间笔记", "type": "system", "order_index": 1, "visible": 1},
     {"id": "transcript", "name": "字幕稿", "type": "system", "order_index": 2, "visible": 1},
     {"id": "mindmap", "name": "思维导图", "type": "system", "order_index": 3, "visible": 1},
     {"id": "qa", "name": "问答", "type": "system", "order_index": 4, "visible": 1},
@@ -29,16 +30,20 @@ def get_tabs() -> List[Dict]:
             rows = c.execute(
                 "SELECT id,name,type,order_index,visible FROM ui_tabs ORDER BY order_index ASC, id ASC"
             ).fetchall()
-    return [
-        {
-            "id": r["id"],
-            "name": r["name"],
-            "type": r["type"],
-            "order_index": r["order_index"],
-            "visible": bool(r["visible"]),
-        }
-        for r in rows
-    ]
+    tabs = []
+    for r in rows:
+        if r["type"] == "system" and r["id"] in _LEGACY_SYSTEM_TAB_IDS:
+            continue
+        tabs.append(
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "type": r["type"],
+                "order_index": r["order_index"],
+                "visible": bool(r["visible"]),
+            }
+        )
+    return tabs
 
 
 def save_tabs(tabs: List[Dict]) -> List[Dict]:
@@ -48,13 +53,16 @@ def save_tabs(tabs: List[Dict]) -> List[Dict]:
     for idx, t in enumerate(tabs or []):
         tid = str(t.get("id") or "").strip()
         name = str(t.get("name") or "").strip()
+        ttype = str(t.get("type") or "custom")
         if not tid or not name:
+            continue
+        if ttype == "system" and tid in _LEGACY_SYSTEM_TAB_IDS:
             continue
         cleaned.append(
             {
                 "id": tid,
                 "name": name,
-                "type": str(t.get("type") or "custom"),
+                "type": ttype,
                 "order_index": int(t.get("order_index", idx)),
                 "visible": 1 if bool(t.get("visible", True)) else 0,
             }
@@ -119,11 +127,24 @@ def _sanitize_summary_sections(raw: Dict) -> Dict:
         return out
 
     d = raw if isinstance(raw, dict) else {}
+    key_points_src = d.get("key_points")
+    if not isinstance(key_points_src, list):
+        key_points_src = d.get("key_takeaways") or []
     return {
         "overview": clip_list(d.get("overview") or [], 24, 2000),
         "outline": clip_list(d.get("outline") or [], 40, 500),
-        "key_points": clip_list(d.get("key_points") or [], 40, 2000),
+        "key_points": clip_list(key_points_src, 40, 2000),
         "one_liner": clip_str(d.get("one_liner") or "", 2000),
+    }
+
+
+def _to_note_sections(summary_sections: Dict) -> Dict:
+    s = _sanitize_summary_sections(summary_sections or {})
+    return {
+        "overview": list(s.get("overview") or []),
+        "outline": list(s.get("outline") or []),
+        "key_takeaways": list(s.get("key_points") or []),
+        "one_liner": str(s.get("one_liner") or ""),
     }
 
 
@@ -143,7 +164,8 @@ def get_summary_edit(task_id: str) -> Optional[Dict]:
         return None
     if not isinstance(data, dict):
         return None
-    return {"sections": _sanitize_summary_sections(data), "updated_at": row["updated_at"]}
+    sections = _sanitize_summary_sections(data)
+    return {"sections": sections, "note_sections": _to_note_sections(sections), "updated_at": row["updated_at"]}
 
 
 def save_summary_edit(task_id: str, sections: Dict) -> Dict:
@@ -163,7 +185,12 @@ def save_summary_edit(task_id: str, sections: Dict) -> Dict:
                 """,
                 (task_id, body, now),
             )
-    return {"task_id": task_id, "sections": cleaned, "updated_at": now}
+    return {
+        "task_id": task_id,
+        "sections": cleaned,
+        "note_sections": _to_note_sections(cleaned),
+        "updated_at": now,
+    }
 
 
 def delete_summary_edit(task_id: str) -> None:

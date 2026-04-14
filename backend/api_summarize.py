@@ -10,12 +10,14 @@ from .auth_routes import get_current_user_id
 from .summarizer import (
     create_summary_task_with_options,
     get_summary_task,
+    normalize_summary_result_payload,
     ask_summary_question,
     translate_summary,
     get_task_subtitle_segments,
     build_task_subtitle_file,
     stream_summary_task,
     chat_with_summary,
+    optimize_task_transcript,
 )
 from .usage_limits import assert_can_summarize, check_burst, record_summarize
 from .workspace_store import (
@@ -28,6 +30,17 @@ router = APIRouter()
 
 @router.post("/api/summarize")
 async def start_summarize(request: Request):
+    """
+    创建 AI 笔记任务（兼容旧 summarize 命名）。
+
+    Request JSON:
+    - url: str
+    - stream: bool (optional)
+
+    Response JSON:
+    - task_id: str
+    - status: "pending"
+    """
     check_burst(request, "summarize")
     try:
         data = await request.json()
@@ -49,6 +62,15 @@ async def start_summarize(request: Request):
 
 @router.get("/api/summarize/{task_id}")
 async def summarize_status(task_id: str):
+    """
+    查询任务状态与结果。
+
+    result 关键字段（已兼容 notes 语义）:
+    - note_sections: {overview, outline, key_takeaways, one_liner}
+    - timeline_notes: [{ts, text}]
+    - key_takeaways: string[]
+    - summary_sections/highlights: 旧字段兼容保留
+    """
     try:
         task = get_summary_task(task_id)
         payload = {
@@ -61,7 +83,7 @@ async def summarize_status(task_id: str):
         }
         result = task.get("result")
         if result:
-            payload["result"] = dict(result)
+            payload["result"] = normalize_summary_result_payload(dict(result))
             md_path = result.get("markdown_file_path")
             if md_path:
                 payload["result"]["markdown_download_url"] = (
@@ -74,6 +96,11 @@ async def summarize_status(task_id: str):
 
 @router.get("/api/summarize/{task_id}/stream")
 async def summarize_stream(task_id: str):
+    """
+    SSE 事件流：
+    - stage / delta / done / error
+    - done.data.result 同步包含 notes 新字段与 summary 兼容字段
+    """
     def gen():
         for item in stream_summary_task(task_id):
             event = item.get("event") or "message"
@@ -148,5 +175,13 @@ async def summarize_subtitles_download(task_id: str, format: str = "srt"):
             filename=os.path.basename(out_path),
             media_type=media_type,
         )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/summarize/{task_id}/transcript/optimize")
+async def summarize_transcript_optimize(task_id: str):
+    try:
+        return optimize_task_transcript(task_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

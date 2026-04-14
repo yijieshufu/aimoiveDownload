@@ -77,6 +77,15 @@
 | **修复要点** | 优先 HEAD；无长度时用 `Range: bytes=0-0` 等回退（见 parser 内注释）。 |
 | **相关文件** | [backend/douyin_parser.py](../backend/douyin_parser.py) |
 
+### 2.5 抖音下载偶发 `Invalid argument`（Windows）
+
+| 项目 | 说明 |
+|------|------|
+| **现象** | 抖音分享口令可解析，但点击下载时偶发报错：`保存或合并文件失败（Invalid argument）`。 |
+| **根因** | 抖音在风控或链路波动时会走 yt-dlp 回退下载；Windows 下该分片/合并链路偶发 `Errno 22`。 |
+| **修复要点** | `download_video` 中新增兜底：当识别为抖音链接且 yt-dlp 抛出 `Invalid argument/Errno 22`，自动回退 `download_douyin_video` 直链下载。 |
+| **相关文件** | [backend/downloader.py](../backend/downloader.py)、[tests/test_downloader_douyin_fallback.py](../tests/test_downloader_douyin_fallback.py) |
+
 ---
 
 ## 3. AI 总结 / ASR
@@ -113,7 +122,7 @@
 |------|------|
 | **现象** | 开发正常、打包后静态资源路径错误，或 `/api` 未打到后端。 |
 | **根因** | 后端将构建产物挂在 `/frontend`，与 Vite 的 `base`、代理目标需一致。 |
-| **修复要点** | `vite.config.js` 中 `base: '/frontend/'`，`server.proxy['/api']` 指向后端端口（默认 8001）。 |
+| **修复要点** | `vite.config.js` 中 `base: '/frontend/'`，`server.proxy['/api']` 指向后端端口（当前统一为 8003）。 |
 | **相关文件** | [frontend/vite.config.js](../frontend/vite.config.js)、[backend/main.py](../backend/main.py) |
 
 ### 5.2 登录态与额度计数不生效
