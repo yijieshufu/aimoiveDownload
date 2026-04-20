@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import yt_dlp
 import os
+import sys
 import json
 import subprocess
 from typing import Optional, List, Dict
@@ -8,11 +11,89 @@ import re
 
 from .douyin_parser import extract_douyin_info, download_douyin_video, is_douyin_url
 
-# 确保临时目录存在
-temp_dir = os.path.join(os.getcwd(), 'temp')
+
+def shorten_windows_path(path: str) -> str:
+    """尽量缩短路径，降低 Win32 CreateFile EINVAL 概率。"""
+    if sys.platform != "win32":
+        return path
+    try:
+        import ctypes
+
+        os.makedirs(path, exist_ok=True)
+        buf = ctypes.create_unicode_buffer(4096)
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        n = k32.GetShortPathNameW(ctypes.c_wchar_p(path), buf, len(buf))
+        if n and buf.value:
+            return buf.value
+    except Exception:
+        pass
+    return path
+
+
+def windows_long_path(abs_path: str) -> str:
+    """为绝对路径加 \\\\?\\ 前缀，便于突破 MAX_PATH（仅 win32）。"""
+    if sys.platform != "win32":
+        return abs_path
+    p = os.path.abspath(os.path.normpath(abs_path))
+    if p.startswith("\\\\?\\"):
+        return p
+    if p.startswith("\\\\"):
+        rest = p[2:].replace("/", "\\").lstrip("\\")
+        return "\\\\?\\UNC\\" + rest
+    return "\\\\?\\" + p
+
+
+# 确保临时目录存在（绝对路径，避免 Windows 下子进程/合并输出路径异常）
+temp_dir = shorten_windows_path(os.path.abspath(os.path.join(os.getcwd(), "temp")))
 os.makedirs(temp_dir, exist_ok=True)
 cookie_file_path = os.path.join(temp_dir, "cookies.txt")
 BROWSER_COOKIE_CANDIDATES = ("edge", "chrome", "chromium", "firefox")
+_URL_TRAILING_CHARS = ")]},.;:!?\"'，。！？；：、】）》）】>"
+
+
+def format_user_ytdlp_error(exc: BaseException) -> str:
+    """将 yt-dlp / 本仓库异常转写为更可读的提示（仍保留部分原文便于排障）。"""
+    text = str(exc).strip() or type(exc).__name__
+    low = text.lower()
+    if "pro" in text and "专享" in text:
+        return text
+    if "private video" in low or "私享" in text or "members only" in low:
+        return "该视频为私密、会员专享或权限不足，无法解析。"
+    if "login required" in low or "sign in to confirm" in low:
+        return "该平台需要登录后才能访问：可尝试上传 cookies.txt（Netscape 格式）或先在浏览器登录。"
+    if "drm" in low:
+        return "受 DRM 或版权加密保护的内容无法通过此方式下载。"
+    if "http error 403" in low or ("403" in text and "forbidden" in low):
+        return "被拒绝访问 (403)：可能被风控或需要有效登录态。"
+    if "not available on this app" in low:
+        return "该内容在当前客户端类型下不可用，请尝试其它来源。"
+    if "unable to download" in low:
+        return "无法拉取媒体文件：链接可能过期、需登录或网络不稳定。"
+    if "errno 22" in low or "invalid argument" in low:
+        if sys.platform == "win32":
+            return (
+                "保存或合并文件失败（Invalid argument）：常见于 Windows 下文件名含非法字符。"
+                "请升级 yt-dlp 到最新版后重试；若仍失败，可将项目放在较短英文路径下再试。"
+            )
+        return text[:420] + ("…" if len(text) > 420 else "")
+    if "ffmpeg" in low or "ffprobe" in low or ("merge" in low and "audio" in low):
+        return "音视频处理失败：请确认已安装 ffmpeg/ffprobe 且在 PATH 中可用。"
+    return text[:420] + ("…" if len(text) > 420 else "")
+
+
+def _is_invalid_argument_error(exc: BaseException) -> bool:
+    low = str(exc).lower()
+    return ("invalid argument" in low) or ("errno 22" in low)
+
+
+def _format_is_ultra_hd(fmt: Optional[Dict]) -> bool:
+    if not fmt:
+        return False
+    w = int(fmt.get("width") or 0)
+    h = int(fmt.get("height") or 0)
+    if w <= 0 and h <= 0:
+        return False
+    return max(w, h) >= 3840 or (w > 0 and h > 0 and min(w, h) >= 2160)
 
 
 def format_duration(seconds: float) -> str:
@@ -31,6 +112,73 @@ def format_duration(seconds: float) -> str:
         return f"{minutes:02d}:{secs:02d}"
 
 
+def _estimate_format_bytes_from_bitrate(fmt: Dict, duration_s: float) -> int:
+    """yt-dlp 很多站点不提供 filesize，用码率 × 时长估算（字节，偏保守展示用）。"""
+    d = float(duration_s or 0)
+    if d <= 0:
+        return 0
+    tbr = fmt.get("tbr")
+    try:
+        if tbr is not None and float(tbr) > 0:
+            return int(d * float(tbr) * 1000 / 8)
+    except (TypeError, ValueError):
+        pass
+    try:
+        vbr = float(fmt.get("vbr") or 0)
+        abr = float(fmt.get("abr") or 0)
+        br = vbr + abr
+        if br > 0:
+            return int(d * br * 1000 / 8)
+    except (TypeError, ValueError):
+        pass
+    return 0
+
+
+def _merged_display_size(fmt: Dict, duration_s: float) -> tuple[int, str]:
+    """
+    返回 (bytes, kind)，kind: exact | approx | estimate | unknown
+    """
+    try:
+        fs = fmt.get("filesize")
+        if fs is not None and int(fs) > 0:
+            return int(fs), "exact"
+    except (TypeError, ValueError):
+        pass
+    try:
+        fa = fmt.get("filesize_approx")
+        if fa is not None and int(fa) > 0:
+            return int(fa), "approx"
+    except (TypeError, ValueError):
+        pass
+    est = _estimate_format_bytes_from_bitrate(fmt, duration_s)
+    if est > 0:
+        return est, "estimate"
+    return 0, "unknown"
+
+
+def _normalize_thumbnail_url(url: str) -> str:
+    """协议相对、http 转 https，避免封面代理 urlparse 失败或混合内容。"""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("http://"):
+        return "https://" + u[len("http://") :]
+    return u
+
+
+def _youtube_avoid_maxres(url: str) -> str:
+    """YouTube maxresdefault 大量视频不存在，统一降级为 hqdefault。"""
+    u = (url or "").strip()
+    if not u:
+        return u
+    low = u.lower()
+    if "ytimg.com" in low and "maxresdefault" in low:
+        return re.sub(r"maxresdefault", "hqdefault", u, flags=re.IGNORECASE)
+    return u
+
+
 def get_best_thumbnail(thumbnails: List[Dict]) -> str:
     """从缩略图列表中选择质量最高的缩略图"""
     if not thumbnails:
@@ -43,7 +191,10 @@ def get_best_thumbnail(thumbnails: List[Dict]) -> str:
             if v:
                 return v
         return ''
-    
+
+    def _url_lower(t: Dict) -> str:
+        return _get_url(t).lower()
+
     # 优先选择有 width 和 height 的缩略图
     valid_thumbnails = [t for t in thumbnails if t.get('width') and t.get('height')]
     if not valid_thumbnails:
@@ -51,12 +202,14 @@ def get_best_thumbnail(thumbnails: List[Dict]) -> str:
         for t in thumbnails:
             url = _get_url(t)
             if url:
-                return url
+                return _youtube_avoid_maxres(_normalize_thumbnail_url(url))
         return ''
-    
-    # 选择分辨率最高的缩略图
-    best = max(valid_thumbnails, key=lambda t: t['width'] * t['height'])
-    return _get_url(best)
+
+    # YouTube：尽量避免选到常 404 的 maxres（有其它档位时优先用其它）
+    non_maxres = [t for t in valid_thumbnails if "maxresdefault" not in _url_lower(t)]
+    pick_pool = non_maxres if non_maxres else valid_thumbnails
+    best = max(pick_pool, key=lambda t: t['width'] * t['height'])
+    return _youtube_avoid_maxres(_normalize_thumbnail_url(_get_url(best)))
 
 
 def check_ffmpeg_available() -> bool:
@@ -69,18 +222,48 @@ def check_ffmpeg_available() -> bool:
 
 
 def normalize_input_to_url(s: str) -> str:
+    def _strip_trailing(url: str) -> str:
+        return (url or "").strip().rstrip(_URL_TRAILING_CHARS)
+
     s = (s or "").strip()
     if not s:
         return ""
     if re.match(r"^https?://", s, flags=re.IGNORECASE):
-        return s
+        return _strip_trailing(s)
     m = re.search(r"(https?://[^\s\"'<>]+)", s, flags=re.IGNORECASE)
     if m:
-        return m.group(1).rstrip(").,;]}>\"'")
+        return _strip_trailing(m.group(1))
     m2 = re.search(r"\b(v\.douyin\.com/[A-Za-z0-9]+)\b", s, flags=re.IGNORECASE)
     if m2:
         return "https://" + m2.group(1)
     return ""
+
+
+def _default_http_headers(url: str) -> Dict[str, str]:
+    headers: Dict[str, str] = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    if "bilibili.com" in (url or "").lower():
+        headers.setdefault("Referer", "https://www.bilibili.com/")
+    return headers
+
+
+def _apply_platform_ydl_defaults(opts: Dict, url: str) -> None:
+    """Windows 下 DASH/分片临时文件名若含标题中的 : | 等会触发 OSError(22, EINVAL)。"""
+    h = opts.get("http_headers")
+    merged = _default_http_headers(url)
+    if isinstance(h, dict) and h:
+        merged = {**merged, **h}
+    opts["http_headers"] = merged
+    if sys.platform == "win32":
+        # YoutubeDL 参数名为 windowsfilenames（非 windows_filenames），否则不会生效
+        opts.setdefault("windowsfilenames", True)
+        opts.setdefault("restrictfilenames", True)
 
 
 def build_ydl_option_variants(base_opts: Dict, url: str) -> List[Dict]:
@@ -90,6 +273,8 @@ def build_ydl_option_variants(base_opts: Dict, url: str) -> List[Dict]:
     2) 自动读取浏览器 cookies（edge/chrome/chromium/firefox）
     3) 无 cookies（非抖音可用）
     """
+    base_opts = dict(base_opts)
+    _apply_platform_ydl_defaults(base_opts, url)
     variants: List[Dict] = []
     if os.path.exists(cookie_file_path):
         with_file = dict(base_opts)
@@ -130,14 +315,6 @@ def extract_video_info(url: str) -> Dict:
         # 这里不要吞错误，便于前端看到真实失败原因
         'ignoreerrors': False,
         'no_warnings': True,
-        'http_headers': {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/122.0.0.0 Safari/537.36'
-            ),
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        },
     }
     info_dict = None
     last_error = None
@@ -162,9 +339,7 @@ def extract_video_info(url: str) -> Dict:
         # 获取最佳缩略图
     thumbnails = info_dict.get('thumbnails', [])
     thumbnail = info_dict.get('thumbnail') or get_best_thumbnail(thumbnails)
-    # 某些页面以 https/file scheme 打开时会拒绝 http 图片
-    if thumbnail and thumbnail.startswith("http://"):
-        thumbnail = thumbnail.replace("http://", "https://", 1)
+    thumbnail = _youtube_avoid_maxres(_normalize_thumbnail_url(thumbnail or ""))
     # 封面可能有防盗链，统一走后端代理（相对路径）
     if thumbnail:
         thumbnail = "/api/thumbnail?src=" + urllib.parse.quote(thumbnail, safe="") + "&referer=" + urllib.parse.quote(normalized_url, safe="")
@@ -187,13 +362,16 @@ def extract_video_info(url: str) -> Dict:
     
     # 添加所有格式，包括视频和音频
     for fmt in formats:
+        disp_bytes, disp_kind = _merged_display_size(fmt, float(duration_seconds))
         format_info = {
             'format_id': fmt.get('format_id'),
             'format_note': fmt.get('format_note', ''),
             'ext': fmt.get('ext'),
             'height': fmt.get('height', 0),
             'width': fmt.get('width', 0),
-            'filesize': fmt.get('filesize', 0),
+            'filesize': fmt.get('filesize') or 0,
+            'display_size_bytes': disp_bytes,
+            'display_size_kind': disp_kind,
             'fps': fmt.get('fps', 0),
             'vcodec': fmt.get('vcodec', ''),
             'acodec': fmt.get('acodec', ''),
@@ -205,8 +383,8 @@ def extract_video_info(url: str) -> Dict:
     return video_info
 
 
-def download_video(url: str, format_id: str) -> Dict:
-    """下载视频，自动合并音视频"""
+def download_video(url: str, format_id: str, *, allow_ultra_hd: bool = False) -> Dict:
+    """下载视频，自动合并音视频。allow_ultra_hd 为 False 时禁止下载 4K/超清档位。"""
     try:
         normalized_url = normalize_input_to_url(url)
         if not normalized_url:
@@ -253,7 +431,10 @@ def download_video(url: str, format_id: str) -> Dict:
             if fmt.get('format_id') == format_id:
                 selected_format = fmt
                 break
-        
+
+        if selected_format and _format_is_ultra_hd(selected_format) and not allow_ultra_hd:
+            raise Exception("该清晰度为 Pro 专享，请升级后下载。")
+
         # 确定是否需要合并音频
         if selected_format:
             vcodec = selected_format.get('vcodec', '')
@@ -372,7 +553,14 @@ def download_video(url: str, format_id: str) -> Dict:
                 "file_size": os.path.getsize(output_file),
                 "ext": os.path.splitext(output_file)[1][1:],
             }
-        except Exception:
+        except Exception as ex:
+            # 抖音在某些 Windows 环境下走 yt-dlp 分片/合并时会偶发 EINVAL，
+            # 自动回退到抖音直链下载，避免用户卡死在“Invalid argument”。
+            if is_douyin_url(normalized_url) and _is_invalid_argument_error(ex):
+                try:
+                    return download_douyin_video(normalized_url, temp_dir)
+                except Exception:
+                    pass
             raise
     except Exception as e:
-        raise Exception(f"下载失败: {str(e)}")
+        raise Exception(format_user_ytdlp_error(e))

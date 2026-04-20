@@ -1,7 +1,12 @@
 .cursor/
+node_modules/
+.codex-logs/
+# Windows reserved name; accidental empty file in repo root
+nul
 temp/
 __pycache__/
 *.pyc
 .venv/
 venv/
 .env
+backend/data/*.db

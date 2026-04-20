@@ -1,146 +1,76 @@
-# 项目发布到 GitHub（Windows / PowerShell）
+# GitHub 提交与稳定推送指南（当前项目）
 
-这份文档用于把当前项目首次发布到 GitHub，并建立后续常规提交流程。
-
----
-
-## 0. 前置准备
-
-- 已安装 Git（命令行可用：`git --version`）
-- 有 GitHub 账号并可登录
-- 当前项目路径：`d:\python\PyPreject\aimoiveDownload`
-
-可选（推荐）：
-
-- 安装 GitHub CLI：`gh`（用于命令行创建仓库）
+这份文档用于沉淀当前仓库的**日常 commit / push 标准动作**，目标是：  
+减少漏提、减少脏文件、网络波动时也能稳定推送。
 
 ---
 
-## 1. 初始化本地 Git 仓库
+## 1. 日常提交标准流程（推荐）
 
-在项目根目录打开 PowerShell，执行：
+在项目根目录执行：
 
-```powershell
-cd d:\python\PyPreject\aimoiveDownload
-git init
+```bash
+git status --short
+git add <你确认要提交的文件>
+git commit -m "feat/fix/docs: 本次改动目的"
 ```
 
----
+建议：
 
-## 2. 准备 `.gitignore`（防止无关文件进仓库）
-
-创建（或补充）项目根目录 `.gitignore`，建议至少包含：
-
-```gitignore
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Runtime/temp
-temp/
-*.log
-
-# IDE / OS
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
-
-# Local env
-.env
-```
+- 优先按文件精确 `git add`，避免 `git add .` 把无关变更一起提交。
+- 提交信息尽量写“为什么改”，不是只写“改了什么”。
+- 提交前至少看一次：`git diff --staged`。
 
 ---
 
-## 3. 首次提交（Initial commit）
+## 2. 推送到 GitHub（稳定方案）
 
-```powershell
-git add .
-git commit -m "Initial commit: douyin parser and downloader web app"
+本仓库已提供脚本：`scripts/git-push-proxy.sh`。  
+默认走本机代理 `127.0.0.1:7897`（适合网络不稳场景）。
+
+```bash
+bash scripts/git-push-proxy.sh
 ```
 
-如果提交时报身份错误，先配置（把内容改成你自己的）：
+自定义代理端口：
 
-```powershell
-git config user.name "你的GitHub用户名"
-git config user.email "你的GitHub邮箱"
+```bash
+PROXY_HOST=127.0.0.1 PROXY_PORT=7899 bash scripts/git-push-proxy.sh
 ```
 
-然后再次执行 `git commit`。
+说明：该脚本仅对本次命令注入 `HTTP_PROXY/HTTPS_PROXY`，不会改全局 Git 配置。
 
 ---
 
-## 4. 在 GitHub 创建远程仓库（两种方式）
+## 3. 快速检查清单（每次提交前 30 秒）
 
-### 方式 A：网页创建（最直观）
-
-1. 打开 [GitHub New Repository](https://github.com/new)
-2. Repository name 填你想要的名字（例如：`aimoiveDownload`）
-3. 选择 Public 或 Private
-4. **不要**勾选 `Add a README` / `.gitignore`（避免和本地初始提交冲突）
-5. 点击 Create repository
-
-创建后会看到远程地址，例如：
-
-- HTTPS：`https://github.com/<你的用户名>/<仓库名>.git`
-- SSH：`git@github.com:<你的用户名>/<仓库名>.git`
-
-### 方式 B：命令行创建（需要 `gh`）
-
-```powershell
-gh auth login
-gh repo create aimoiveDownload --private --source . --remote origin --push
-```
-
-> 这条命令会创建远程仓库、绑定 `origin`，并把当前分支直接 push。
+- `git status --short`：确认仅包含预期文件
+- `git diff --staged`：确认已暂存内容正确
+- `git branch --show-current`：确认在正确分支
+- `git log --oneline -n 3`：保持提交风格一致
 
 ---
 
-## 5. 绑定远程并首次 push（网页方式创建仓库时用）
+## 4. 常见问题与处理
 
-如果你是用网页创建仓库，执行：
-
-```powershell
-git branch -M main
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-git push -u origin main
-```
-
-如果你更喜欢 SSH，把 remote URL 换成 SSH 地址即可。
-
----
-
-## 6. 之后的日常提交流程
-
-每次改完代码后：
-
-```powershell
-git add .
-git commit -m "描述这次改动"
-git push
-```
-
----
-
-## 7. 常见问题排查
-
-- `remote origin already exists`
-  - 先看当前远程：`git remote -v`
-  - 覆盖远程地址：`git remote set-url origin <新地址>`
+- `Failed to connect github.com:443`
+  - 直接改用：`bash scripts/git-push-proxy.sh`
 - `failed to push some refs`
-  - 先拉取再推送：`git pull --rebase origin main`，解决冲突后 `git push`
-- HTTPS push 反复要密码
-  - 推荐使用 GitHub Token 或切换 SSH
+  - 先同步远端：`git pull --rebase origin <当前分支>`，处理冲突后再推送
+- 不小心带上本地日志或临时文件
+  - 先 `git reset <文件>` 取消暂存，再补充 `.gitignore` 规则
 
 ---
 
-## 8. 建议的首个里程碑
+## 5. 本仓库忽略规则（与提交流程相关）
 
-首次 push 后，在 GitHub 仓库里补齐：
+当前已忽略关键本地噪音文件：
 
-- 项目描述（About）
-- Topics（如 `fastapi` `douyin` `video-downloader`）
-- `README` 增加运行截图和 API 示例
+- `.codex-logs/`
+- `node_modules/`
+- `temp/`
+- `__pycache__/`
+- `.venv/` / `venv/`
+
+如新增本地工具目录，记得同步更新根目录 `.gitignore`，避免污染提交历史。
 
